@@ -1,0 +1,51 @@
+# environment
+.env
+.env.local
+.env.*.local
+
+# python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+*.pyc
+
+# node
+node_modules/
+.next/
+out/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# database / docker volumes
+pgdata/
+redisdata/
+
+# alembic generated versions (keep the folder, ignore generated files)
+backend/alembic/versions/*.py
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# logs
+*.log
+logs/
+
+# keys / secrets (belt and suspenders)
+*.pem
+*.key
+secrets/

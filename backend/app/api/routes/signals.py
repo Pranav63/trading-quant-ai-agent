@@ -1,0 +1,14 @@
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from app.db.session import get_db
+from app.models.market import Signal
+
+router = APIRouter(prefix="/signals", tags=["signals"])
+
+@router.get("/recent")
+async def get_recent_signals(limit: int = Query(20, le=100), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(Signal).order_by(Signal.created_at.desc()).limit(limit)
+    )
+    return result.scalars().all()

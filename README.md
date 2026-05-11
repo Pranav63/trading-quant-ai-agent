@@ -276,6 +276,91 @@ These live in `backend/app/broker/risk_guard.py`:
 - Position sizing scales with LLM confidence (85% conf = ~$93, 60% = ~$66)
 
 ---
+## technical indicators
+
+Every LLM signal passes through a technical confirmation layer before
+becoming a PENDING trade. A signal is only queued if at least 2 of 3
+core indicators agree with the LLM direction.
+
+### indicators used
+
+| indicator | buy condition | sell condition |
+|-----------|---------------|----------------|
+| RSI(14) | RSI < 65 (not overbought) | RSI > 40 (not oversold) |
+| EMA 9/21 crossover | fast EMA > slow EMA (momentum bullish) | fast EMA < slow EMA (momentum bearish) |
+| VWAP | current price > 5-day VWAP | current price < 5-day VWAP |
+| volume spike | volume > 1.5x 20-day average (bonus confirmation) | same |
+
+### combined confidence scoring
+
+Raw LLM confidence and indicator agreement are combined into a single
+score before the trade is created:
+
+```
+combined_confidence = (llm_confidence × 0.6) + (indicator_score × 0.4)
+```
+
+A trade is only created if:
+- at least 2 of 3 core indicators agree with the LLM direction
+- combined confidence >= 0.55
+
+Signals that fail technical confirmation are logged to the database
+with their indicator details but never reach the approval queue.
+
+### what this prevents
+
+Without indicators, a news-only BUY signal on an overbought,
+downtrending ETF with no volume would reach your approval queue.
+With indicators, that signal gets killed before you ever see it.
+
+Example: LLM says BUY XLE at 85% confidence. RSI is 78 (overbought),
+EMA 9 is below EMA 21 (bearish momentum), price is below VWAP. All
+three indicators disagree. Signal is discarded. You never see it.
+
+### data source
+
+Historical bars and quotes are pulled from Alpaca's market data API
+using the same API key as the trading account. No additional keys needed.
+
+---
+
+## live quotes
+
+The dashboard ticker bar shows real-time bid/ask prices for all
+watchlist tickers, fetched from Alpaca every 60 seconds via
+`GET /api/v1/portfolio/quotes`. Prices update independently of
+positions — all 9 watchlist ETFs show prices whether or not you
+hold them.
+
+Prices are only available during US market hours and pre/after-hours
+when Alpaca's data feed is active. Outside those windows the endpoint
+returns whatever the last known quote was.
+
+---
+
+## signal pipeline (updated)
+
+```
+news article ingested
+        ↓
+LLM classifier (Groq llama-3.3-70b)
+        ↓ BUY/SELL + confidence
+Technical screener (RSI, EMA, VWAP, volume)
+        ↓ confirmed / rejected
+  ┌─────┴─────┐
+rejected     confirmed
+  ↓               ↓
+logged       combined confidence calculated
+             (llm × 0.6) + (indicators × 0.4)
+                  ↓ if >= 0.55
+             PENDING trade created
+                  ↓
+             your approval
+                  ↓
+             Alpaca paper execution
+```
+
+---
 
 ## API reference
 

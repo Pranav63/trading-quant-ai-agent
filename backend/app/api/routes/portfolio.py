@@ -1,8 +1,11 @@
 from fastapi import APIRouter
-from app.broker.alpaca_client import get_account, get_positions
+from app.broker.alpaca_client import get_account, get_positions, data_client
 from app.core.logging import logger
+from alpaca.data.requests import StockLatestQuoteRequest
 
 router = APIRouter(prefix="/portfolio", tags=["portfolio"])
+
+WATCHLIST = ["SPY", "QQQ", "XLE", "GLD", "TLT", "XLK", "XLF", "XLI", "XLV"]
 
 @router.get("/account")
 def account_summary():
@@ -30,9 +33,23 @@ def positions():
         for p in pos
     ]
 
+@router.get("/quotes")
+def get_quotes():
+    try:
+        req = StockLatestQuoteRequest(symbol_or_symbols=WATCHLIST)
+        quotes = data_client.get_stock_latest_quote(req)
+        result = {}
+        for sym, q in quotes.items():
+            price = q.ask_price or q.bid_price
+            if price:
+                result[sym] = float(price)
+        return result
+    except Exception as e:
+        logger.error("quotes.error", error=str(e))
+        return {}
+
 @router.get("/history")
 def portfolio_history():
-    # Returns empty until account has multi-day history
     return {
         "timestamps": [],
         "equity": [],

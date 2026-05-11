@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   getAccount, getPositions, getPortfolioHistory,
   getPendingTrades, getSignals, getNews,
-  approveTrade, rejectTrade
+  approveTrade, rejectTrade, getQuotes
 } from "@/lib/api"
 import { fmt$$, fmtTime } from "@/lib/utils"
 import { useEffect, useState } from "react"
@@ -69,53 +69,33 @@ function Sparkline({ values }: { values: number[] }) {
   )
 }
 
-function TickerBar({ positions }: { positions: any[] }) {
+function TickerBar({ quotes }: { quotes: Record<string, number> }) {
   const watchlist = ["SPY", "QQQ", "XLE", "GLD", "TLT", "XLK", "XLF", "XLI", "XLV"]
-  const posMap = Object.fromEntries((positions ?? []).map(p => [p.ticker, p]))
   return (
     <div style={{
       background: "#111118", borderBottom: "1px solid #1e1e2e",
       padding: "8px 20px", display: "flex", gap: 24, overflowX: "auto",
       scrollbarWidth: "none",
     }}>
-      {watchlist.map(sym => {
-        const pos = posMap[sym]
-        const pct = pos ? (pos.unrealized_plpc * 100).toFixed(2) : null
-        const isUp = pos ? pos.unrealized_plpc >= 0 : true
-        return (
-          <div key={sym} style={{ display: "flex", alignItems: "center", gap: 8, whiteSpace: "nowrap" }}>
-            <span style={{ color: "#7c7c9a", fontSize: 11, letterSpacing: "0.05em" }}>{sym}</span>
-            {pos ? (
-              <>
-                <span style={{ color: "#e2e2e8", fontWeight: 500 }}>{fmt$$(pos.current_price)}</span>
-                <span style={{ color: isUp ? "#22c55e" : "#ef4444", fontSize: 11 }}>
-                  {isUp ? "+" : ""}{pct}%
-                </span>
-              </>
-            ) : (
-              <span style={{ color: "#4a4a6a", fontSize: 11 }}>—</span>
-            )}
-          </div>
-        )
-      })}
+      {watchlist.map(sym => (
+        <div key={sym} style={{ display: "flex", alignItems: "center", gap: 8, whiteSpace: "nowrap" }}>
+          <span style={{ color: "#7c7c9a", fontSize: 11, letterSpacing: "0.05em" }}>{sym}</span>
+          <span style={{ color: "#e2e2e8", fontWeight: 500, fontSize: 12 }}>
+            {quotes[sym] ? `$${quotes[sym].toFixed(2)}` : "—"}
+          </span>
+        </div>
+      ))}
     </div>
   )
 }
 
-const PANEL: React.CSSProperties = {
-  background: "#0d0d14", padding: 16,
-}
+const PANEL: React.CSSProperties = { background: "#0d0d14", padding: 16 }
 const LABEL: React.CSSProperties = {
   fontSize: 10, letterSpacing: "0.1em", color: "#4a4a6a",
   textTransform: "uppercase", marginBottom: 12,
   display: "flex", alignItems: "center", gap: 6,
 }
-const DIVIDER: React.CSSProperties = {
-  borderBottom: "1px solid #1e1e2e",
-}
-const MONO: React.CSSProperties = {
-  fontFamily: "'SF Mono', 'Fira Code', 'Cascadia Code', monospace",
-}
+const DIVIDER: React.CSSProperties = { borderBottom: "1px solid #1e1e2e" }
 
 export default function DashboardPage() {
   const qc = useQueryClient()
@@ -137,6 +117,11 @@ export default function DashboardPage() {
   const { data: pending } = useQuery({ queryKey: ["pending"], queryFn: getPendingTrades })
   const { data: signals } = useQuery({ queryKey: ["signals"], queryFn: getSignals })
   const { data: news } = useQuery({ queryKey: ["news"], queryFn: getNews })
+  const { data: quotes } = useQuery({
+    queryKey: ["quotes"],
+    queryFn: getQuotes,
+    refetchInterval: 60000,
+  })
 
   const { mutate: approve } = useMutation({
     mutationFn: approveTrade,
@@ -154,10 +139,6 @@ export default function DashboardPage() {
     <>
       <style>{`
         @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.25} }
-        @keyframes ticker {
-          0%{transform:translateX(0)}
-          100%{transform:translateX(-50%)}
-        }
         .dash-btn-approve {
           background:#0d2e1a;color:#22c55e;border:1px solid #1a4a2a;
           padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer;
@@ -171,14 +152,14 @@ export default function DashboardPage() {
         }
         .dash-btn-reject:hover{background:#4a1a1a}
         .dash-row:hover{background:#111118}
-        .dash-news-src-finn{background:#0d1e2e;color:#378add;border:1px solid #1a3a5a}
-        .dash-news-src-news{background:#1e0d2e;color:#a855f7;border:1px solid #3a1a5a}
+        .dash-news-src-finnhub{background:#0d1e2e;color:#378add;border:1px solid #1a3a5a}
+        .dash-news-src-newsapi{background:#1e0d2e;color:#a855f7;border:1px solid #3a1a5a}
         .dash-news-src-reddit{background:#2e1a0d;color:#f97316;border:1px solid #5a3a1a}
       `}</style>
 
       <div style={{
         background: "#0a0a0f", color: "#e2e2e8",
-        ...MONO,
+        fontFamily: "'SF Mono','Fira Code','Cascadia Code',monospace",
         fontSize: 13, borderRadius: 12, overflow: "hidden",
         border: "1px solid #1e1e2e", width: "100%",
       }}>
@@ -201,13 +182,12 @@ export default function DashboardPage() {
         </div>
 
         {/* Ticker */}
-        <TickerBar positions={positions ?? []} />
+        <TickerBar quotes={quotes ?? {}} />
 
         {/* Body grid */}
         <div style={{
           display: "grid",
           gridTemplateColumns: "1fr 1fr 1fr",
-          gridTemplateRows: "auto auto",
           gap: 1,
           background: "#1e1e2e",
         }}>
@@ -229,7 +209,7 @@ export default function DashboardPage() {
                   <div style={{ fontSize: 10, color: "#4a4a6a", letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 4 }}>
                     {s.label}
                   </div>
-                  <div style={{ fontSize: 18, fontWeight: 600, color: s.color ?? "#e2e2e8" }}>
+                  <div style={{ fontSize: 18, fontWeight: 600, color: (s as any).color ?? "#e2e2e8" }}>
                     {s.value}
                   </div>
                 </div>
@@ -319,16 +299,12 @@ export default function DashboardPage() {
               <div style={{ color: "#4a4a6a", fontSize: 12 }}>no pending trades</div>
             )}
 
-            {/* Equity curve */}
             <div style={{ marginTop: 20 }}>
               <div style={LABEL}>equity curve</div>
               <Sparkline values={history?.equity ?? []} />
               <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4 }}>
                 <span style={{ color: "#4a4a6a", fontSize: 11 }}>30d ago</span>
-                <span style={{
-                  fontSize: 12, fontWeight: 600,
-                  color: totalPL >= 0 ? "#22c55e" : "#ef4444",
-                }}>
+                <span style={{ fontSize: 12, fontWeight: 600, color: totalPL >= 0 ? "#22c55e" : "#ef4444" }}>
                   {totalPL >= 0 ? "+" : ""}{fmt$$(totalPL)}
                 </span>
                 <span style={{ color: "#4a4a6a", fontSize: 11 }}>today</span>
@@ -343,11 +319,10 @@ export default function DashboardPage() {
               {news?.slice(0, 9).map(a => (
                 <div key={a.id} style={{ ...DIVIDER, paddingBottom: 10, marginBottom: 2 }}>
                   <div style={{ marginBottom: 5 }}>
-                    <span className={`dash-news-src-${a.source}`} style={{
-                      fontSize: 10, letterSpacing: "0.06em",
-                      padding: "1px 6px", borderRadius: 2,
-                      display: "inline-block",
-                    }}>
+                    <span
+                      className={`dash-news-src-${a.source}`}
+                      style={{ fontSize: 10, letterSpacing: "0.06em", padding: "1px 6px", borderRadius: 2, display: "inline-block" }}
+                    >
                       {a.source}{a.tickers?.length ? ` · ${a.tickers[0]}` : ""}
                     </span>
                   </div>
@@ -366,7 +341,7 @@ export default function DashboardPage() {
                 </div>
               ))}
               {!news?.length && (
-                <div style={{ color: "#4a4a6a", fontSize: 12 }}>no articles yet</div>
+                <div style={{ color: "#4a4a6a", fontSize: 12 }}>no articles yet — run ingestion</div>
               )}
             </div>
           </div>

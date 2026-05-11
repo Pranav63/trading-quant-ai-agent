@@ -15,6 +15,9 @@ export const getPositions = (): Promise<Position[]> =>
 export const getPortfolioHistory = (): Promise<PortfolioHistory> =>
   api.get("/api/v1/portfolio/history").then(r => r.data)
 
+export const getQuotes = (): Promise<Record<string, number>> =>
+  api.get("/api/v1/portfolio/quotes").then(r => r.data)
+
 export const getNews = (): Promise<NewsArticle[]> =>
   api.get("/api/v1/news/recent", { params: { limit: 30 } }).then(r => r.data)
 

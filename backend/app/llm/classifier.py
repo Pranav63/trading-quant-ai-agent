@@ -15,6 +15,8 @@ from app.db.redis_client import get_redis
 from app.db.session import AsyncSessionLocal
 from app.models.market import Signal, Trade, SignalType, TradeStatus
 from app.broker.risk_guard import compute_notional
+from app.indicators.techincal import confirm_signal
+
 
 settings = get_settings()
 groq_client = AsyncGroq(api_key=settings.groq_api_key)
@@ -123,13 +125,27 @@ async def process_queue_item(item: dict, db: AsyncSession):
 
         if signal_type == "HOLD" or confidence < 0.5:
             continue
+        # technical confirmation
+        tech = confirm_signal(ticker, signal_type)
+        if not tech["confirmed"]:
+            logger.info(
+                "signal.rejected_by_indicators",
+                ticker=ticker,
+                signal=signal_type,
+                details=tech["details"],
+            )
+            continue
 
+        # combine confidence scores
+        combined_confidence = (confidence * 0.6) + (tech["indicator_score"] * 0.4)
+        if combined_confidence < 0.55:
+            continue
         # Write Signal row
         signal = Signal(
             news_article_id=article_id,
             signal_type=SignalType(signal_type),
             ticker=ticker,
-            confidence=confidence,
+            confidence=combined_confidence,
             reasoning=reasoning,
             llm_model="llama-3.3-70b-versatile",
             raw_llm_response=result,

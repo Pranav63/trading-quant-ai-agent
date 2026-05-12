@@ -1,7 +1,6 @@
 """
 Reads from Redis queue:classify, calls Groq LLM to classify each
 news article into a trading signal, writes Signal + Trade rows to DB.
-Runs as a background worker alongside the scheduler.
 """
 import json
 import asyncio
@@ -10,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from groq import AsyncGroq
 from app.core.config import get_settings
 from app.core.logging import logger
+from app.core.activity import push_event
 from app.db.redis_client import get_redis
 from app.db.session import AsyncSessionLocal
 from app.models.market import Signal, Trade, SignalType, TradeStatus
@@ -77,7 +77,6 @@ async def classify_article(headline: str, summary: str, ticker_hint: str = None)
     user_content = f"Headline: {headline}\nSummary: {summary or 'N/A'}"
     if ticker_hint:
         user_content += f"\nDirect ticker context: {ticker_hint}"
-
     try:
         response = await groq_client.chat.completions.create(
             model="llama-3.3-70b-versatile",
@@ -106,7 +105,6 @@ async def process_queue_item(item: dict, db: AsyncSession):
 
     redis = await get_redis()
 
-    # Dedup — skip if already processed
     already = await redis.sismember(PROCESSED_SET_KEY, article_id)
     if already:
         return
@@ -126,38 +124,46 @@ async def process_queue_item(item: dict, db: AsyncSession):
         if signal_type == "HOLD" or confidence < 0.5:
             continue
 
-        # Technical confirmation — runs in thread pool to avoid blocking event loop
         try:
             loop = asyncio.get_event_loop()
             tech = await loop.run_in_executor(None, confirm_signal, ticker, signal_type)
         except Exception as e:
             logger.error("indicators.executor.error", ticker=ticker, error=str(e))
-            tech = {"confirmed": True, "indicator_score": 0.5, "atr": None,
-                    "atr_pct": None, "stop_loss_distance": None, "details": {}}
+            tech = {
+                "confirmed": True, "indicator_score": 0.5,
+                "atr": None, "atr_pct": None,
+                "stop_loss_distance": None, "details": {}
+            }
 
         if not tech["confirmed"]:
+            veto_reason = tech["details"].get("atr_veto_reason")
+            votes = tech["details"].get("votes", 0)
+            total = tech["details"].get("total", 0)
+            reason = veto_reason or f"{votes}/{total} indicators passed"
+            await push_event(
+                "signal_rejected",
+                f"{signal_type} {ticker} rejected — {reason}",
+                {"ticker": ticker, "reason": reason}
+            )
             logger.info(
                 "signal.rejected_by_indicators",
-                ticker=ticker,
-                signal=signal_type,
+                ticker=ticker, signal=signal_type,
                 atr_veto=tech["details"].get("atr_veto"),
-                atr_veto_reason=tech["details"].get("atr_veto_reason"),
-                votes=tech["details"].get("votes"),
-                total=tech["details"].get("total"),
+                votes=votes, total=total,
             )
             continue
 
-        # Combined confidence: 60% LLM + 40% indicator agreement
         combined_confidence = round((confidence * 0.6) + (tech["indicator_score"] * 0.4), 4)
+
         if combined_confidence < 0.55:
-            logger.info(
-                "signal.low_combined_confidence",
-                ticker=ticker,
-                combined=combined_confidence,
+            await push_event(
+                "signal_low_confidence",
+                f"{signal_type} {ticker} dropped — combined {round(combined_confidence*100)}% below 55% threshold",
+                {"ticker": ticker, "confidence": combined_confidence}
             )
+            logger.info("signal.low_combined_confidence", ticker=ticker, combined=combined_confidence)
             continue
 
-        # Write Signal row
         signal = Signal(
             news_article_id=article_id,
             signal_type=SignalType(signal_type),
@@ -175,7 +181,6 @@ async def process_queue_item(item: dict, db: AsyncSession):
         db.add(signal)
         await db.flush()
 
-        # Write Trade row — PENDING until you approve
         notional = compute_notional(combined_confidence)
         trade = Trade(
             signal_id=signal.id,
@@ -187,10 +192,15 @@ async def process_queue_item(item: dict, db: AsyncSession):
         )
         db.add(trade)
 
+        await push_event(
+            "signal_created",
+            f"{signal_type} {ticker} {round(combined_confidence*100)}% — {reasoning[:70]}",
+            {"ticker": ticker, "signal": signal_type, "confidence": combined_confidence, "notional": notional}
+        )
+
         logger.info(
             "signal.created",
-            ticker=ticker,
-            signal=signal_type,
+            ticker=ticker, signal=signal_type,
             llm_confidence=confidence,
             indicator_score=round(tech["indicator_score"], 2),
             combined_confidence=combined_confidence,
@@ -205,10 +215,6 @@ async def process_queue_item(item: dict, db: AsyncSession):
 
 
 async def run_classifier_worker():
-    """
-    Continuously drains the classify queue.
-    Runs as a background task alongside APScheduler.
-    """
     logger.info("classifier.worker.started")
     redis = await get_redis()
 

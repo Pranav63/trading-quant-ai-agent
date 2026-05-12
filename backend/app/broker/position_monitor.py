@@ -1,37 +1,29 @@
 """
 Position monitor — runs every 5 minutes via scheduler.
-Checks every open Alpaca position against stop-loss and take-profit levels.
-Generates automatic SELL trades when thresholds are breached.
-
-Stop loss:  entry_price - (ATR × 2)   — dynamic, adapts to volatility
-Take profit: entry_price + (ATR × 3)  — 1.5× risk/reward ratio minimum
-Fallback:   if no ATR available, use fixed 3% stop / 5% take profit
 """
+import asyncio
 from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from app.broker.alpaca_client import get_positions, get_latest_price
+from app.broker.alpaca_client import get_positions
 from app.db.session import AsyncSessionLocal
 from app.models.market import Trade, TradeStatus, Signal, SignalType
 from app.indicators.technical import get_daily_bars, compute_atr
 from app.core.logging import logger
+from app.core.activity import push_event
 
-# Fallback percentages if ATR unavailable
-STOP_LOSS_PCT    = 0.03   # 3% below entry
-TAKE_PROFIT_PCT  = 0.05   # 5% above entry
-
-# ATR multipliers
-ATR_STOP_MULT    = 2.0    # stop loss = entry - (ATR × 2)
-ATR_TP_MULT      = 3.0    # take profit = entry + (ATR × 3)
-
-# Trailing stop: if position is up > 4%, trail stop up to lock in gains
+STOP_LOSS_PCT     = 0.03
+TAKE_PROFIT_PCT   = 0.05
+ATR_STOP_MULT     = 2.0
+ATR_TP_MULT       = 3.0
 TRAILING_TRIGGER_PCT = 0.04
-TRAILING_STOP_PCT    = 0.02   # trail 2% below current high
+TRAILING_STOP_PCT    = 0.02
 
 
 async def get_atr_for_ticker(ticker: str) -> float | None:
     try:
-        bars = get_daily_bars(ticker, days=20)
+        loop = asyncio.get_event_loop()
+        bars = await loop.run_in_executor(None, get_daily_bars, ticker, 20)
         if not bars:
             return None
         return compute_atr(bars, period=14)
@@ -41,19 +33,23 @@ async def get_atr_for_ticker(ticker: str) -> float | None:
 
 
 async def check_positions(db: AsyncSession):
-    """
-    Called by scheduler every 5 minutes.
-    For each open Alpaca position:
-      1. Get current price
-      2. Compute stop-loss and take-profit levels
-      3. If breached, create PENDING SELL trade
-      4. Deduplication: skip if a pending SELL already exists for this ticker
-    """
     positions = get_positions()
     if not positions:
         return
 
     logger.info("position_monitor.checking", count=len(positions))
+
+    # Push monitor heartbeat
+    status_parts = []
+    for pos in positions:
+        pct = float(pos.unrealized_plpc) * 100
+        status_parts.append(f"{pos.symbol} {pct:+.1f}%")
+
+    await push_event(
+        "position_monitor",
+        f"monitoring {len(positions)} position{'s' if len(positions) != 1 else ''} — {', '.join(status_parts)}",
+        {"count": len(positions)}
+    )
 
     for pos in positions:
         ticker = pos.symbol
@@ -62,7 +58,6 @@ async def check_positions(db: AsyncSession):
         current = float(pos.current_price)
         unrealized_plpc = float(pos.unrealized_plpc)
 
-        # Skip if already have a pending SELL for this ticker
         existing = await db.execute(
             select(Trade).where(
                 Trade.ticker == ticker,
@@ -74,29 +69,23 @@ async def check_positions(db: AsyncSession):
             logger.info("position_monitor.sell_already_pending", ticker=ticker)
             continue
 
-        # Get ATR for dynamic levels
         atr = await get_atr_for_ticker(ticker)
 
         if atr:
-            stop_loss_price  = round(entry - (atr * ATR_STOP_MULT), 2)
+            stop_loss_price   = round(entry - (atr * ATR_STOP_MULT), 2)
             take_profit_price = round(entry + (atr * ATR_TP_MULT), 2)
             method = "atr"
         else:
-            stop_loss_price  = round(entry * (1 - STOP_LOSS_PCT), 2)
+            stop_loss_price   = round(entry * (1 - STOP_LOSS_PCT), 2)
             take_profit_price = round(entry * (1 + TAKE_PROFIT_PCT), 2)
             method = "fixed_pct"
 
-        # Trailing stop: if we're up more than TRAILING_TRIGGER_PCT,
-        # raise the stop loss to lock in at least half the gain
-        trailing_stop = None
         if unrealized_plpc >= TRAILING_TRIGGER_PCT:
             trailing_stop = round(current * (1 - TRAILING_STOP_PCT), 2)
-            # Use trailing stop if it's higher than original stop loss
             if trailing_stop > stop_loss_price:
                 stop_loss_price = trailing_stop
                 method = "trailing"
 
-        # Determine if we should exit
         exit_reason = None
         if current <= stop_loss_price:
             exit_reason = f"stop_loss hit — current ${current} <= stop ${stop_loss_price} ({method})"
@@ -105,25 +94,28 @@ async def check_positions(db: AsyncSession):
 
         logger.info(
             "position_monitor.status",
-            ticker=ticker,
-            entry=entry,
-            current=current,
-            stop=stop_loss_price,
-            target=take_profit_price,
+            ticker=ticker, entry=entry, current=current,
+            stop=stop_loss_price, target=take_profit_price,
             pnl_pct=round(unrealized_plpc * 100, 2),
-            method=method,
-            exit_reason=exit_reason,
+            method=method, exit_reason=exit_reason,
         )
 
         if not exit_reason:
             continue
 
-        # Create exit signal
+        # Push exit alert
+        is_stop = "stop_loss" in exit_reason
+        await push_event(
+            "stop_loss_triggered" if is_stop else "take_profit_triggered",
+            f"EXIT SIGNAL: {ticker} — {exit_reason}",
+            {"ticker": ticker, "current": current, "method": method}
+        )
+
         signal = Signal(
             news_article_id=None,
             signal_type=SignalType.SELL,
             ticker=ticker,
-            confidence=0.99,   # exits are high confidence — rule-based not LLM
+            confidence=0.99,
             reasoning=exit_reason,
             llm_model="position_monitor",
             raw_llm_response={
@@ -139,12 +131,11 @@ async def check_positions(db: AsyncSession):
         db.add(signal)
         await db.flush()
 
-        # Create PENDING SELL trade — still requires your approval
         trade = Trade(
             signal_id=signal.id,
             ticker=ticker,
             side="sell",
-            qty=qty,       # sell full position
+            qty=qty,
             notional=round(qty * current, 2),
             status=TradeStatus.PENDING,
         )
@@ -152,10 +143,8 @@ async def check_positions(db: AsyncSession):
 
         logger.info(
             "position_monitor.exit_signal_created",
-            ticker=ticker,
-            reason=exit_reason,
-            qty=qty,
-            notional=round(qty * current, 2),
+            ticker=ticker, reason=exit_reason,
+            qty=qty, notional=round(qty * current, 2),
         )
 
     await db.commit()

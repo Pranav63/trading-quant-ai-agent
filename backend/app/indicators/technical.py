@@ -2,13 +2,19 @@
 Technical indicator confirmation layer.
 Uses hourly bars for RSI and EMA (relevant for same-day news entries).
 Uses daily bars for ATR (volatility context over recent sessions).
+
+Bar data is cached for 15 minutes to avoid hammering Alpaca API
+on every article classification within the same ingestion cycle.
 """
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 from datetime import datetime, timezone, timedelta
 from app.core.config import get_settings
+from alpaca.data.enums import DataFeed
+
 from app.core.logging import logger
+import threading
 
 settings = get_settings()
 
@@ -17,8 +23,39 @@ data_client = StockHistoricalDataClient(
     secret_key=settings.alpaca_secret_key,
 )
 
+# ── Bar cache ─────────────────────────────────────────────────────────────────
+# Keyed by "ticker:timeframe:days" → (data, fetched_at)
+# TTL matches ingestion interval — 15 minutes
+_bar_cache: dict = {}
+_cache_lock = threading.Lock()
+CACHE_TTL_SECONDS = 900
+
+def _get_cached(key: str) -> list[dict] | None:
+    with _cache_lock:
+        if key in _bar_cache:
+            data, fetched_at = _bar_cache[key]
+            age = (datetime.now(timezone.utc) - fetched_at).total_seconds()
+            if age < CACHE_TTL_SECONDS:
+                return data
+    return None
+
+def _set_cached(key: str, data: list[dict]):
+    with _cache_lock:
+        _bar_cache[key] = (data, datetime.now(timezone.utc))
+
+def clear_bar_cache():
+    """Call at start of ingestion cycle to force fresh data."""
+    with _cache_lock:
+        _bar_cache.clear()
+
+# ── Bar fetchers ──────────────────────────────────────────────────────────────
+
 def get_hourly_bars(ticker: str, days: int = 10) -> list[dict]:
-    """Hourly bars — relevant for same-day signal entries."""
+    key = f"{ticker}:hour:{days}"
+    cached = _get_cached(key)
+    if cached is not None:
+        return cached
+
     end = datetime.now(timezone.utc)
     start = end - timedelta(days=days)
     req = StockBarsRequest(
@@ -26,22 +63,33 @@ def get_hourly_bars(ticker: str, days: int = 10) -> list[dict]:
         timeframe=TimeFrame.Hour,
         start=start,
         end=end,
+        feed=DataFeed.IEX,
     )
-    bars = data_client.get_stock_bars(req)
-    return [
-        {
-            "open": float(b.open),
-            "high": float(b.high),
-            "low": float(b.low),
-            "close": float(b.close),
-            "volume": float(b.volume),
-        }
-        for b in bars[ticker]
-    ] if ticker in bars else []
+    try:
+        bars = data_client.get_stock_bars(req)
+        result = [
+            {
+                "open": float(b.open),
+                "high": float(b.high),
+                "low": float(b.low),
+                "close": float(b.close),
+                "volume": float(b.volume),
+            }
+            for b in bars[ticker]
+        ] if ticker in bars else []
+        _set_cached(key, result)
+        return result
+    except Exception as e:
+        logger.error("indicators.hourly_bars.error", ticker=ticker, error=str(e))
+        return []
 
 
 def get_daily_bars(ticker: str, days: int = 30) -> list[dict]:
-    """Daily bars — for ATR and volume spike context."""
+    key = f"{ticker}:day:{days}"
+    cached = _get_cached(key)
+    if cached is not None:
+        return cached
+
     end = datetime.now(timezone.utc)
     start = end - timedelta(days=days)
     req = StockBarsRequest(
@@ -49,19 +97,28 @@ def get_daily_bars(ticker: str, days: int = 30) -> list[dict]:
         timeframe=TimeFrame.Day,
         start=start,
         end=end,
+        feed=DataFeed.IEX,
     )
-    bars = data_client.get_stock_bars(req)
-    return [
-        {
-            "open": float(b.open),
-            "high": float(b.high),
-            "low": float(b.low),
-            "close": float(b.close),
-            "volume": float(b.volume),
-        }
-        for b in bars[ticker]
-    ] if ticker in bars else []
+    try:
+        bars = data_client.get_stock_bars(req)
+        result = [
+            {
+                "open": float(b.open),
+                "high": float(b.high),
+                "low": float(b.low),
+                "close": float(b.close),
+                "volume": float(b.volume),
+            }
+            for b in bars[ticker]
+        ] if ticker in bars else []
+        _set_cached(key, result)
+        return result
+    except Exception as e:
+        logger.error("indicators.daily_bars.error", ticker=ticker, error=str(e))
+        return []
 
+
+# ── Indicator math ────────────────────────────────────────────────────────────
 
 def compute_rsi(closes: list[float], period: int = 14) -> float | None:
     if len(closes) < period + 1:
@@ -90,10 +147,6 @@ def compute_ema(closes: list[float], period: int) -> float | None:
 
 
 def compute_atr(bars: list[dict], period: int = 14) -> float | None:
-    """
-    Average True Range over daily bars.
-    True Range = max(high-low, abs(high-prev_close), abs(low-prev_close))
-    """
     if len(bars) < period + 1:
         return None
     true_ranges = []
@@ -107,25 +160,16 @@ def compute_atr(bars: list[dict], period: int = 14) -> float | None:
             abs(low - prev_close),
         )
         true_ranges.append(tr)
-    # Simple average of last N true ranges
     return sum(true_ranges[-period:]) / period
 
 
 def compute_atr_percentile(atr: float, closes: list[float]) -> float:
-    """
-    ATR as % of current price — normalizes across different-priced ETFs.
-    XLE at $88 and SPY at $521 have very different raw ATR values.
-    """
     if not closes or closes[-1] == 0:
         return 0.0
     return (atr / closes[-1]) * 100
 
 
 def compute_weighted_avg_price(bars: list[dict]) -> float | None:
-    """
-    Volume-weighted average price over supplied bars.
-    Not intraday VWAP — honest name for what this actually computes.
-    """
     if not bars:
         return None
     total_vol = sum(b["volume"] for b in bars)
@@ -135,10 +179,6 @@ def compute_weighted_avg_price(bars: list[dict]) -> float | None:
 
 
 def check_volume_spike(daily_bars: list[dict], lookback: int = 20) -> bool:
-    """
-    Checks if the most recent COMPLETED day had a volume spike.
-    Note: current day volume not included until market close.
-    """
     if len(daily_bars) < lookback + 1:
         return False
     volumes = [b["volume"] for b in daily_bars]
@@ -146,19 +186,13 @@ def check_volume_spike(daily_bars: list[dict], lookback: int = 20) -> bool:
     return volumes[-1] > avg * 1.5
 
 
+# ── Main confirmation function ────────────────────────────────────────────────
+
 def confirm_signal(ticker: str, signal_type: str) -> dict:
     """
     Multi-timeframe signal confirmation.
-
-    Hourly bars → RSI(14), EMA 9/21 (fast, relevant for news entries)
-    Daily bars → ATR volatility filter, volume spike, weighted avg price
-
-    Returns:
-        confirmed: bool
-        indicator_score: float (0.0 - 1.0)
-        atr: float | None (for dynamic stop-loss sizing)
-        atr_pct: float | None (ATR as % of price)
-        details: dict
+    Reads from cache if available — first call per ticker per cycle
+    fetches from Alpaca, subsequent calls are instant.
     """
     try:
         hourly = get_hourly_bars(ticker, days=10)
@@ -171,6 +205,7 @@ def confirm_signal(ticker: str, signal_type: str) -> dict:
                 "indicator_score": 0.5,
                 "atr": None,
                 "atr_pct": None,
+                "stop_loss_distance": None,
                 "details": {},
             }
 
@@ -178,13 +213,10 @@ def confirm_signal(ticker: str, signal_type: str) -> dict:
         d_closes = [b["close"] for b in daily]
         current_price = h_closes[-1]
 
-        # --- Hourly indicators (fast signal confirmation) ---
-        rsi = compute_rsi(h_closes, period=14)
-        ema9 = compute_ema(h_closes, 9)
-        ema21 = compute_ema(h_closes, 21)
-
-        # --- Daily indicators (context) ---
-        atr = compute_atr(daily, period=14)
+        rsi    = compute_rsi(h_closes, period=14)
+        ema9   = compute_ema(h_closes, 9)
+        ema21  = compute_ema(h_closes, 21)
+        atr    = compute_atr(daily, period=14)
         atr_pct = compute_atr_percentile(atr, d_closes) if atr else None
         wav_price = compute_weighted_avg_price(daily[-5:])
         vol_spike = check_volume_spike(daily)
@@ -192,47 +224,34 @@ def confirm_signal(ticker: str, signal_type: str) -> dict:
         votes = 0
         total = 0
 
-        # RSI — hourly
         rsi_ok = False
         if rsi is not None:
             total += 1
             if signal_type == "BUY" and rsi < 65:
-                rsi_ok = True
-                votes += 1
+                rsi_ok = True; votes += 1
             elif signal_type == "SELL" and rsi > 40:
-                rsi_ok = True
-                votes += 1
+                rsi_ok = True; votes += 1
 
-        # EMA crossover — hourly
         ema_ok = False
         if ema9 and ema21:
             total += 1
             if signal_type == "BUY" and ema9 > ema21:
-                ema_ok = True
-                votes += 1
+                ema_ok = True; votes += 1
             elif signal_type == "SELL" and ema9 < ema21:
-                ema_ok = True
-                votes += 1
+                ema_ok = True; votes += 1
 
-        # Weighted average price — daily
         wav_ok = False
         if wav_price:
             total += 1
             if signal_type == "BUY" and current_price > wav_price:
-                wav_ok = True
-                votes += 1
+                wav_ok = True; votes += 1
             elif signal_type == "SELL" and current_price < wav_price:
-                wav_ok = True
-                votes += 1
+                wav_ok = True; votes += 1
 
-        # Volume spike — bonus
         if vol_spike:
             votes += 1
             total += 1
 
-        # ATR volatility filter — hard veto, not a vote
-        # If ATR > 3% of price: market is in panic, skip entry
-        # If ATR < 0.2% of price: market is dead, news won't move it
         atr_veto = False
         atr_veto_reason = None
         if atr_pct is not None:
@@ -245,8 +264,6 @@ def confirm_signal(ticker: str, signal_type: str) -> dict:
 
         indicator_score = votes / total if total > 0 else 0.5
         confirmed = (votes >= 2) and not atr_veto
-
-        # Dynamic stop-loss: 2× ATR from entry
         stop_loss_distance = round(atr * 2, 2) if atr else None
 
         details = {

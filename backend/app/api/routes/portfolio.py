@@ -64,14 +64,14 @@ def positions():
 @router.get("/quotes")
 def get_quotes():
     try:
-        req = StockLatestQuoteRequest(symbol_or_symbols=WATCHLIST)
-        quotes = data_client.get_stock_latest_quote(req)
-        result = {}
-        for sym, q in quotes.items():
-            price = q.ask_price or q.bid_price
-            if price:
-                result[sym] = float(price)
-        return result
+        from alpaca.data.requests import StockLatestBarRequest
+        from alpaca.data.enums import DataFeed
+        req = StockLatestBarRequest(
+            symbol_or_symbols=WATCHLIST,
+            feed=DataFeed.IEX,
+        )
+        bars = data_client.get_stock_latest_bar(req)
+        return {sym: float(b.close) for sym, b in bars.items()}
     except Exception as e:
         logger.error("quotes.error", error=str(e))
         return {}

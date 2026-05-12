@@ -1,8 +1,9 @@
 from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
+from alpaca.trading.requests import MarketOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.data.historical import StockHistoricalDataClient
-from alpaca.data.requests import StockLatestQuoteRequest
+from alpaca.data.requests import StockLatestQuoteRequest, StockLatestBarRequest
+from alpaca.data.enums import DataFeed
 from app.core.config import get_settings
 from app.core.logging import logger
 
@@ -26,26 +27,22 @@ def get_positions():
     return trading_client.get_all_positions()
 
 def get_latest_price(ticker: str) -> float:
-    req = StockLatestQuoteRequest(symbol_or_symbols=ticker)
-    quote = data_client.get_stock_latest_quote(req)
-    return float(quote[ticker].ask_price)
+    req = StockLatestBarRequest(symbol_or_symbols=ticker, feed=DataFeed.IEX)
+    bars = data_client.get_stock_latest_bar(req)
+    return float(bars[ticker].close) if ticker in bars else 0.0
 
 def place_market_order(ticker: str, side: str, notional: float) -> dict:
-    """
-    Place a notional market order (dollar amount, not shares).
-    side: "buy" or "sell"
-    notional: dollar amount e.g. 100.0
-    """
     order_side = OrderSide.BUY if side == "buy" else OrderSide.SELL
     req = MarketOrderRequest(
         symbol=ticker,
         notional=round(notional, 2),
         side=order_side,
-        time_in_force=TimeInForce.DAY,
+        time_in_force=TimeInForce.GTC,
     )
     try:
         order = trading_client.submit_order(req)
-        logger.info("alpaca.order.submitted", ticker=ticker, side=side, notional=notional, order_id=str(order.id))
+        logger.info("alpaca.order.submitted",
+            ticker=ticker, side=side, notional=notional, order_id=str(order.id))
         return {"order_id": str(order.id), "status": str(order.status)}
     except Exception as e:
         logger.error("alpaca.order.failed", ticker=ticker, error=str(e))

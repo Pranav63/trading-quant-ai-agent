@@ -2,12 +2,19 @@
 Main ingestion pipeline. Called by the scheduler every N minutes.
 Fetches news + sentiment for watchlist tickers, persists to DB,
 and queues articles for LLM classification.
+
+Pre-warms the bar cache for all watchlist tickers in parallel
+before ingestion — this means the first classify call per ticker
+is instant instead of making a live Alpaca API call.
 """
 import json
+import asyncio
 from datetime import datetime, timezone, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.redis_client import get_redis
 from app.models.market import NewsArticle
+from app.core.activity import push_event
+
 from app.ingestion.finnhub_client import get_company_news
 from app.ingestion.newsapi_client import get_top_business_headlines
 from app.core.config import get_settings
@@ -15,12 +22,45 @@ from app.core.logging import logger
 
 settings = get_settings()
 
-# Sector ETF watchlist — this is our v1 universe
 WATCHLIST = ["SPY", "QQQ", "XLK", "XLF", "XLE", "XLV", "XLI", "GLD", "TLT"]
 CLASSIFY_QUEUE_KEY = "queue:classify"
 
+
+async def _warm_ticker_cache(ticker: str):
+    """Fetch hourly + daily bars for one ticker into cache."""
+    from app.indicators.technical import get_hourly_bars, get_daily_bars
+    loop = asyncio.get_event_loop()
+    try:
+        await asyncio.gather(
+            loop.run_in_executor(None, get_hourly_bars, ticker, 10),
+            loop.run_in_executor(None, get_daily_bars, ticker, 30),
+        )
+    except Exception as e:
+        logger.warning("ingestion.cache.warm_failed", ticker=ticker, error=str(e))
+
+
+async def _warm_all_caches():
+    """
+    Pre-warm bar cache for all 9 watchlist tickers in parallel.
+    9 tickers × 2 calls = 18 Alpaca calls running concurrently.
+    Takes ~2-3s total instead of 18 × 1.5s = 27s sequential.
+    """
+    from app.indicators.technical import clear_bar_cache
+    clear_bar_cache()
+    logger.info("ingestion.cache.warming", tickers=len(WATCHLIST))
+    await asyncio.gather(*[_warm_ticker_cache(t) for t in WATCHLIST])
+    logger.info("ingestion.cache.warmed")
+
+
 async def run_ingestion_cycle(db: AsyncSession):
+    await push_event("ingestion_start", "fetching news from Finnhub + NewsAPI...")
+
     logger.info("ingestion.cycle.start")
+
+    # Pre-warm indicator cache — all 9 tickers fetched in parallel
+    # so classify worker never waits on Alpaca during this cycle
+    await _warm_all_caches()
+
     redis = await get_redis()
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
@@ -29,7 +69,7 @@ async def run_ingestion_cycle(db: AsyncSession):
     for ticker in WATCHLIST:
         try:
             articles = await get_company_news(ticker, yesterday, today)
-            for a in articles[:5]:  # cap per ticker to protect rate limit
+            for a in articles[:5]:
                 article = NewsArticle(
                     source="finnhub",
                     headline=a.get("headline", ""),
@@ -79,4 +119,7 @@ async def run_ingestion_cycle(db: AsyncSession):
 
     await db.commit()
     queue_len = await redis.llen(CLASSIFY_QUEUE_KEY)
+    await push_event("ingestion_complete",
+        f"ingested articles — {queue_len} queued for classification",
+        {"queued": queue_len})
     logger.info("ingestion.cycle.done", queued_for_classification=queue_len)

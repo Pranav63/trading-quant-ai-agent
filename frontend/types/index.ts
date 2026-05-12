@@ -33,7 +33,16 @@ export interface Trade {
   filled_at: string | null
   created_at: string
   updated_at: string
-  signal_id: string
+  signal_id: string | null
+  // risk fields (only on pending)
+  current_price?: number
+  stop_loss?: number
+  take_profit?: number
+  shares?: number
+  max_loss?: number
+  max_gain?: number
+  risk_pct_of_account?: number
+  rr_ratio?: number
 }
 
 export interface Position {
@@ -63,3 +72,6 @@ export interface PortfolioHistory {
   profit_loss: number[]
   profit_loss_pct: number[]
 }
+
+export const getRecentlyFailed = (): Promise<Trade[]> =>
+  api.get("/api/v1/trades/recently-failed").then(r => r.data)

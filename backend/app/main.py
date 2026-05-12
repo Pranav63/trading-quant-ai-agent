@@ -73,3 +73,10 @@ def health():
 async def trigger_ingestion(db: AsyncSession = Depends(get_db)):
     await run_ingestion_cycle(db)
     return {"status": "done"}
+@app.get("/api/v1/activity/feed")
+async def activity_feed():
+    from app.db.redis_client import get_redis
+    import json
+    redis = await get_redis()
+    raw = await redis.lrange("activity:feed", 0, 49)
+    return [json.loads(r) for r in raw]

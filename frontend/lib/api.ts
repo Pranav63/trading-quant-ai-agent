@@ -38,3 +38,20 @@ export const rejectTrade = (id: string): Promise<{ status: string }> =>
 
 export const triggerIngestion = (): Promise<{ status: string }> =>
   api.post("/api/v1/debug/trigger-ingestion").then(r => r.data)
+
+export const getRecentlyFailed = (): Promise<Trade[]> =>
+  api.get("/api/v1/trades/recently-failed").then(r => r.data)
+
+export interface ActivityEvent {
+  id: string
+  type: string
+  message: string
+  icon: string
+  color: string
+  label: string
+  ts: string
+  meta: Record<string, any>
+}
+
+export const getActivityFeed = (): Promise<ActivityEvent[]> =>
+  api.get("/api/v1/activity/feed").then(r => r.data)

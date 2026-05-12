@@ -3,10 +3,49 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   getAccount, getPositions, getPortfolioHistory,
   getPendingTrades, getSignals, getNews,
-  approveTrade, rejectTrade, getQuotes
+  approveTrade, rejectTrade, getQuotes, getActivityFeed
 } from "@/lib/api"
+import type { ActivityEvent } from "@/lib/api"
 import { fmt$$, fmtTime } from "@/lib/utils"
 import { useEffect, useState } from "react"
+
+function ActivityFeedInline() {
+  const { data: events } = useQuery({
+    queryKey: ["activity"],
+    queryFn: getActivityFeed,
+    refetchInterval: 5000,
+  })
+
+  const timeAgo = (iso: string) => {
+    const secs = Math.floor((Date.now() - new Date(iso).getTime()) / 1000)
+    if (secs < 60) return `${secs}s`
+    if (secs < 3600) return `${Math.floor(secs / 60)}m`
+    return `${Math.floor(secs / 3600)}h`
+  }
+
+  return (
+    <div style={{ maxHeight: 110, overflowY: "auto", scrollbarWidth: "none" }}>
+      {events?.slice(0, 8).map(e => (
+        <div key={e.id} style={{
+          display: "flex", alignItems: "center", gap: 6,
+          padding: "3px 0", borderBottom: "1px solid #1a1a2a",
+        }}>
+          <span style={{ color: e.color, fontSize: 10, flexShrink: 0 }}>{e.icon}</span>
+          <span style={{
+            fontSize: 10, color: "#6a6a8a", flex: 1,
+            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+          }}>
+            {e.message}
+          </span>
+          <span style={{ fontSize: 9, color: "#4a4a6a", flexShrink: 0 }}>{timeAgo(e.ts)}</span>
+        </div>
+      ))}
+      {!events?.length && (
+        <div style={{ fontSize: 10, color: "#4a4a6a" }}>waiting for activity...</div>
+      )}
+    </div>
+  )
+}
 
 function Pulse() {
   return (
@@ -90,6 +129,54 @@ function TickerBar({ quotes }: { quotes: Record<string, number> }) {
   )
 }
 
+function MarketStatusBar() {
+  const [status, setStatus] = useState({ isOpen: false, label: "checking..." })
+  useEffect(() => {
+    const check = () => {
+      const now = new Date()
+      const mins = now.getUTCHours() * 60 + now.getUTCMinutes()
+      const isOpen = mins >= 810 && mins < 1200
+      const isPremarket = mins >= 480 && mins < 810
+      setStatus({
+        isOpen,
+        label: isOpen ? "market open" : isPremarket ? "pre-market" : "market closed",
+      })
+    }
+    check()
+    const id = setInterval(check, 60000)
+    return () => clearInterval(id)
+  }, [])
+
+  return (
+    <div style={{
+      padding: "5px 20px", flexShrink: 0,
+      background: status.isOpen ? "#0a1a0a" : "#111108",
+      borderBottom: "1px solid #1e1e2e",
+      display: "flex", alignItems: "center",
+      justifyContent: "space-between", fontSize: 11,
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{
+          width: 5, height: 5, borderRadius: "50%",
+          background: status.isOpen ? "#22c55e" : "#f59e0b",
+          display: "inline-block",
+          animation: status.isOpen ? "pulse 2s ease-in-out infinite" : undefined,
+        }} />
+        <span style={{ color: status.isOpen ? "#22c55e" : "#f59e0b", fontWeight: 600 }}>
+          {status.label}
+        </span>
+        <span style={{ color: "#4a4a6a" }}>
+          {status.isOpen
+            ? "orders execute immediately"
+            : "approved trades queue — execute at 9:30 PM SGT open"
+          }
+        </span>
+      </div>
+      <span style={{ color: "#4a4a6a", fontSize: 10 }}>SGT: 9:30 PM – 4:00 AM</span>
+    </div>
+  )
+}
+
 const PANEL: React.CSSProperties = {
   background: "#0d0d14", padding: 14,
   display: "flex", flexDirection: "column",
@@ -132,6 +219,7 @@ export default function DashboardPage() {
   const { mutate: approve } = useMutation({
     mutationFn: approveTrade,
     onSuccess: () => qc.invalidateQueries(),
+    onError: () => qc.invalidateQueries(),
   })
   const { mutate: reject } = useMutation({
     mutationFn: rejectTrade,
@@ -145,25 +233,16 @@ export default function DashboardPage() {
     <>
       <style>{`
         @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.25} }
-        .dash-btn-approve {
-          background:#0d2e1a;color:#22c55e;border:1px solid #1a4a2a;
-          padding:3px 8px;border-radius:4px;font-size:10px;cursor:pointer;
-          font-family:inherit;letter-spacing:0.04em;transition:background 0.15s;
-          white-space:nowrap;
+        .dash-row:hover { background: #111118 !important; }
+        .dash-scroll::-webkit-scrollbar { display: none; }
+        .dash-news-src-finnhub { background:#0d1e2e;color:#378add;border:1px solid #1a3a5a }
+        .dash-news-src-newsapi { background:#1e0d2e;color:#a855f7;border:1px solid #3a1a5a }
+        .dash-news-src-reddit  { background:#2e1a0d;color:#f97316;border:1px solid #5a3a1a }
+        .approve-btn {
+          padding:7px 0; font-size:11px; font-weight:600; cursor:pointer;
+          font-family:inherit; border:none; letter-spacing:0.04em; transition:all 0.15s;
         }
-        .dash-btn-approve:hover{background:#1a4a2a}
-        .dash-btn-reject {
-          background:#2e0d0d;color:#ef4444;border:1px solid #4a1a1a;
-          padding:3px 8px;border-radius:4px;font-size:10px;cursor:pointer;
-          font-family:inherit;letter-spacing:0.04em;margin-left:4px;transition:background 0.15s;
-          white-space:nowrap;
-        }
-        .dash-btn-reject:hover{background:#4a1a1a}
-        .dash-row:hover{background:#111118 !important}
-        .dash-scroll::-webkit-scrollbar{display:none}
-        .dash-news-src-finnhub{background:#0d1e2e;color:#378add;border:1px solid #1a3a5a}
-        .dash-news-src-newsapi{background:#1e0d2e;color:#a855f7;border:1px solid #3a1a5a}
-        .dash-news-src-reddit{background:#2e1a0d;color:#f97316;border:1px solid #5a3a1a}
+        .approve-btn:hover { filter: brightness(1.3); }
       `}</style>
 
       <div style={{
@@ -175,7 +254,7 @@ export default function DashboardPage() {
         display: "flex", flexDirection: "column",
       }}>
 
-        {/* Header — fixed height */}
+        {/* Header */}
         <div style={{
           background: "#0d0d14", padding: "10px 20px",
           borderBottom: "1px solid #1e1e2e",
@@ -193,10 +272,13 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* Ticker — fixed height */}
+        {/* Ticker */}
         <TickerBar quotes={quotes ?? {}} />
 
-        {/* Body grid — fills remaining height */}
+        {/* Market status */}
+        <MarketStatusBar />
+
+        {/* Body grid */}
         <div style={{
           display: "grid",
           gridTemplateColumns: "1fr 1fr 1fr",
@@ -212,7 +294,6 @@ export default function DashboardPage() {
           <div style={PANEL}>
             <div style={LABEL}>portfolio</div>
 
-            {/* Stat cards — fixed, never shrink */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12, flexShrink: 0 }}>
               {[
                 { label: "equity", value: fmt$$(equity) },
@@ -236,7 +317,6 @@ export default function DashboardPage() {
 
             <div style={{ ...LABEL, marginBottom: 6 }}>open positions</div>
 
-            {/* Scrollable positions */}
             <div className="dash-scroll" style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
               {positions?.length ? positions.map(p => (
                 <div key={p.ticker} className="dash-row" style={{
@@ -287,11 +367,11 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          {/* Signals panel */}
+          {/* Signals + Activity panel */}
           <div style={PANEL}>
             <div style={LABEL}><Pulse />live signals</div>
             <div className="dash-scroll" style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
-              {signals?.slice(0, 20).map(s => (
+              {signals?.slice(0, 12).map(s => (
                 <div key={s.id} className="dash-row" style={{
                   ...DIVIDER, display: "flex", alignItems: "center",
                   gap: 8, padding: "7px 4px", transition: "background 0.15s",
@@ -307,8 +387,14 @@ export default function DashboardPage() {
                 </div>
               ))}
               {!signals?.length && (
-                <div style={{ color: "#4a4a6a", fontSize: 11 }}>no signals yet</div>
+                <div style={{ color: "#4a4a6a", fontSize: 11 }}>no signals yet — run ingestion</div>
               )}
+            </div>
+
+            {/* Activity feed */}
+            <div style={{ flexShrink: 0, marginTop: 10, paddingTop: 10, borderTop: "1px solid #1e1e2e" }}>
+              <div style={{ ...LABEL, marginBottom: 6 }}><Pulse />activity</div>
+              <ActivityFeedInline />
             </div>
           </div>
 
@@ -336,7 +422,6 @@ export default function DashboardPage() {
                     border: `1px solid ${isExit ? "#4a1a1a" : "#1e1e2e"}`,
                     background: isExit ? "rgba(239,68,68,0.04)" : "#111118",
                   }}>
-                    {/* Trade info row */}
                     <div style={{
                       padding: "8px 10px",
                       display: "flex", alignItems: "center", justifyContent: "space-between",
@@ -351,51 +436,48 @@ export default function DashboardPage() {
                           }}>EXIT</span>
                         )}
                       </div>
-                      <span style={{ fontSize: 14, fontWeight: 700, color: "#e2e2e8" }}>
-                        {fmt$$(t.notional)}
-                      </span>
+                      <div style={{ textAlign: "right" }}>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: "#e2e2e8" }}>
+                          {fmt$$(t.notional)}
+                        </div>
+                        {(t as any).stop_loss && (
+                          <div style={{ fontSize: 9, color: "#4a4a6a", marginTop: 1 }}>
+                            SL {fmt$$((t as any).stop_loss)} · TP {fmt$$((t as any).take_profit)}
+                          </div>
+                        )}
+                      </div>
                     </div>
-
-                    {/* Action buttons */}
                     <div style={{
                       display: "grid", gridTemplateColumns: "1fr 1fr",
                       borderTop: "1px solid #1e1e2e", gap: 1, background: "#1e1e2e",
                     }}>
                       <button
+                        className="approve-btn"
                         onClick={() => reject(t.id)}
-                        style={{
-                          padding: "7px 0", fontSize: 11, fontWeight: 600,
-                          cursor: "pointer", fontFamily: "inherit",
-                          background: "#0d0d14", color: "#6a6a8a",
-                          border: "none", letterSpacing: "0.04em",
-                          transition: "all 0.15s",
-                        }}
+                        style={{ background: "#0d0d14", color: "#6a6a8a" }}
                         onMouseEnter={e => {
-                          ;(e.currentTarget as HTMLButtonElement).style.background = "#2e0d0d"
-                          ;(e.currentTarget as HTMLButtonElement).style.color = "#ef4444"
+                          ;(e.currentTarget).style.background = "#2e0d0d"
+                          ;(e.currentTarget).style.color = "#ef4444"
                         }}
                         onMouseLeave={e => {
-                          ;(e.currentTarget as HTMLButtonElement).style.background = "#0d0d14"
-                          ;(e.currentTarget as HTMLButtonElement).style.color = "#6a6a8a"
+                          ;(e.currentTarget).style.background = "#0d0d14"
+                          ;(e.currentTarget).style.color = "#6a6a8a"
                         }}
                       >
                         ✕ reject
                       </button>
                       <button
+                        className="approve-btn"
                         onClick={() => approve(t.id)}
                         style={{
-                          padding: "7px 0", fontSize: 11, fontWeight: 600,
-                          cursor: "pointer", fontFamily: "inherit",
                           background: isExit ? "#2e0d0d" : "#0d2e1a",
                           color: isExit ? "#ef4444" : "#22c55e",
-                          border: "none", letterSpacing: "0.04em",
-                          transition: "all 0.15s",
                         }}
                         onMouseEnter={e => {
-                          ;(e.currentTarget as HTMLButtonElement).style.background = isExit ? "#4a1a1a" : "#1a4a2a"
+                          ;(e.currentTarget).style.background = isExit ? "#4a1a1a" : "#1a4a2a"
                         }}
                         onMouseLeave={e => {
-                          ;(e.currentTarget as HTMLButtonElement).style.background = isExit ? "#2e0d0d" : "#0d2e1a"
+                          ;(e.currentTarget).style.background = isExit ? "#2e0d0d" : "#0d2e1a"
                         }}
                       >
                         ✓ {isExit ? "approve exit" : "approve entry"}
@@ -415,7 +497,7 @@ export default function DashboardPage() {
               )}
             </div>
 
-            {/* Equity curve — pinned to bottom */}
+            {/* Equity curve */}
             <div style={{ flexShrink: 0, marginTop: 12, paddingTop: 12, borderTop: "1px solid #1e1e2e" }}>
               <div style={LABEL}>equity curve</div>
               <Sparkline values={history?.equity ?? []} />
@@ -429,7 +511,7 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          {/* News panel — bottom row, spans 3 cols, fixed 160px */}
+          {/* News panel — spans 3 cols */}
           <div style={{
             ...PANEL,
             gridColumn: "span 3",
@@ -440,7 +522,6 @@ export default function DashboardPage() {
           }}>
             <div style={{
               padding: "10px 14px",
-              borderRight: "1px solid #1e1e2e",
               display: "flex", flexDirection: "column",
               width: "100%",
             }}>

@@ -32,17 +32,43 @@ def get_latest_price(ticker: str) -> float:
     return float(bars[ticker].close) if ticker in bars else 0.0
 
 def place_market_order(ticker: str, side: str, notional: float) -> dict:
+    from alpaca.data.requests import StockLatestBarRequest
+    from alpaca.data.enums import DataFeed
+
     order_side = OrderSide.BUY if side == "buy" else OrderSide.SELL
-    req = MarketOrderRequest(
-        symbol=ticker,
-        notional=round(notional, 2),
-        side=order_side,
-        time_in_force=TimeInForce.GTC,
-    )
+
+    # Whole share orders support GTC — notional/fractional require DAY
     try:
-        order = trading_client.submit_order(req)
+        req = StockLatestBarRequest(symbol_or_symbols=ticker, feed=DataFeed.IEX)
+        bars = data_client.get_stock_latest_bar(req)
+        price = float(bars[ticker].close) if ticker in bars else None
+    except Exception:
+        price = None
+
+    if price and price > 0:
+        # Round DOWN to whole shares — never exceed notional budget
+        qty = max(1, int(notional / price))
+        order_req = MarketOrderRequest(
+            symbol=ticker,
+            qty=qty,
+            side=order_side,
+            time_in_force=TimeInForce.GTC,
+        )
+        logger.info("alpaca.order.whole_shares", ticker=ticker, qty=qty, price=price, notional=notional)
+    else:
+        # Fallback to DAY notional if price fetch fails
+        order_req = MarketOrderRequest(
+            symbol=ticker,
+            notional=round(notional, 2),
+            side=order_side,
+            time_in_force=TimeInForce.DAY,
+        )
+        logger.info("alpaca.order.notional_fallback", ticker=ticker, notional=notional)
+
+    try:
+        order = trading_client.submit_order(order_req)
         logger.info("alpaca.order.submitted",
-            ticker=ticker, side=side, notional=notional, order_id=str(order.id))
+            ticker=ticker, side=side, order_id=str(order.id))
         return {"order_id": str(order.id), "status": str(order.status)}
     except Exception as e:
         logger.error("alpaca.order.failed", ticker=ticker, error=str(e))

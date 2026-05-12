@@ -7,7 +7,6 @@ import json
 import asyncio
 from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 from groq import AsyncGroq
 from app.core.config import get_settings
 from app.core.logging import logger
@@ -15,8 +14,7 @@ from app.db.redis_client import get_redis
 from app.db.session import AsyncSessionLocal
 from app.models.market import Signal, Trade, SignalType, TradeStatus
 from app.broker.risk_guard import compute_notional
-from app.indicators.techincal import confirm_signal
-
+from app.indicators.technical import confirm_signal
 
 settings = get_settings()
 groq_client = AsyncGroq(api_key=settings.groq_api_key)
@@ -74,6 +72,7 @@ Rules:
 - Be conservative — only flag HIGH CONVICTION signals
 """
 
+
 async def classify_article(headline: str, summary: str, ticker_hint: str = None) -> dict:
     user_content = f"Headline: {headline}\nSummary: {summary or 'N/A'}"
     if ticker_hint:
@@ -97,6 +96,7 @@ async def classify_article(headline: str, summary: str, ticker_hint: str = None)
     except Exception as e:
         logger.error("llm.classify.error", error=str(e), headline=headline[:60])
         return {"actionable": False, "signals": []}
+
 
 async def process_queue_item(item: dict, db: AsyncSession):
     article_id = item.get("article_id")
@@ -125,21 +125,38 @@ async def process_queue_item(item: dict, db: AsyncSession):
 
         if signal_type == "HOLD" or confidence < 0.5:
             continue
-        # technical confirmation
-        tech = confirm_signal(ticker, signal_type)
+
+        # Technical confirmation — runs in thread pool to avoid blocking event loop
+        try:
+            loop = asyncio.get_event_loop()
+            tech = await loop.run_in_executor(None, confirm_signal, ticker, signal_type)
+        except Exception as e:
+            logger.error("indicators.executor.error", ticker=ticker, error=str(e))
+            tech = {"confirmed": True, "indicator_score": 0.5, "atr": None,
+                    "atr_pct": None, "stop_loss_distance": None, "details": {}}
+
         if not tech["confirmed"]:
             logger.info(
                 "signal.rejected_by_indicators",
                 ticker=ticker,
                 signal=signal_type,
-                details=tech["details"],
+                atr_veto=tech["details"].get("atr_veto"),
+                atr_veto_reason=tech["details"].get("atr_veto_reason"),
+                votes=tech["details"].get("votes"),
+                total=tech["details"].get("total"),
             )
             continue
 
-        # combine confidence scores
-        combined_confidence = (confidence * 0.6) + (tech["indicator_score"] * 0.4)
+        # Combined confidence: 60% LLM + 40% indicator agreement
+        combined_confidence = round((confidence * 0.6) + (tech["indicator_score"] * 0.4), 4)
         if combined_confidence < 0.55:
+            logger.info(
+                "signal.low_combined_confidence",
+                ticker=ticker,
+                combined=combined_confidence,
+            )
             continue
+
         # Write Signal row
         signal = Signal(
             news_article_id=article_id,
@@ -148,33 +165,44 @@ async def process_queue_item(item: dict, db: AsyncSession):
             confidence=combined_confidence,
             reasoning=reasoning,
             llm_model="llama-3.3-70b-versatile",
-            raw_llm_response=result,
+            raw_llm_response={
+                **result,
+                "indicators": tech["details"],
+                "atr_pct": tech.get("atr_pct"),
+                "stop_loss_distance": tech.get("stop_loss_distance"),
+            },
         )
         db.add(signal)
         await db.flush()
 
-        # Write Trade row (PENDING — waits for your approval)
-        notional = compute_notional(confidence)
+        # Write Trade row — PENDING until you approve
+        notional = compute_notional(combined_confidence)
         trade = Trade(
             signal_id=signal.id,
             ticker=ticker,
             side=signal_type.lower(),
-            qty=0,             # notional order, qty filled by Alpaca
+            qty=0,
             notional=notional,
             status=TradeStatus.PENDING,
         )
         db.add(trade)
+
         logger.info(
             "signal.created",
             ticker=ticker,
             signal=signal_type,
-            confidence=confidence,
+            llm_confidence=confidence,
+            indicator_score=round(tech["indicator_score"], 2),
+            combined_confidence=combined_confidence,
             notional=notional,
+            atr_pct=tech.get("atr_pct"),
+            stop_loss_distance=tech.get("stop_loss_distance"),
             reasoning=reasoning,
         )
 
     await db.commit()
     await redis.sadd(PROCESSED_SET_KEY, article_id)
+
 
 async def run_classifier_worker():
     """
@@ -186,7 +214,6 @@ async def run_classifier_worker():
 
     while True:
         try:
-            # Blocking pop with 5s timeout
             item_raw = await redis.brpop(CLASSIFY_QUEUE_KEY, timeout=5)
             if item_raw is None:
                 await asyncio.sleep(1)

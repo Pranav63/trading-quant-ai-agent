@@ -17,21 +17,49 @@ def account_summary():
         "portfolio_value": float(acc.portfolio_value),
         "daytrade_count": acc.daytrade_count,
     }
-
 @router.get("/positions")
 def positions():
-    pos = get_positions()
-    return [
-        {
+    from app.indicators.technical import get_daily_bars, compute_atr
+    from app.broker.position_monitor import ATR_STOP_MULT, ATR_TP_MULT, STOP_LOSS_PCT, TAKE_PROFIT_PCT
+
+    pos_list = get_positions()
+    result = []
+    for p in pos_list:
+        entry = float(p.avg_entry_price)
+        current = float(p.current_price)
+        unrealized_plpc = float(p.unrealized_plpc)
+
+        # Try ATR-based levels first
+        try:
+            bars = get_daily_bars(p.symbol, days=20)
+            atr = compute_atr(bars, period=14) if bars else None
+        except Exception:
+            atr = None
+
+        if atr:
+            stop_loss  = round(entry - (atr * ATR_STOP_MULT), 2)
+            take_profit = round(entry + (atr * ATR_TP_MULT), 2)
+        else:
+            stop_loss  = round(entry * (1 - STOP_LOSS_PCT), 2)
+            take_profit = round(entry * (1 + TAKE_PROFIT_PCT), 2)
+
+        # How far are we from each level (as %)
+        pct_to_stop   = round((current - stop_loss) / current * 100, 2)
+        pct_to_target = round((take_profit - current) / current * 100, 2)
+
+        result.append({
             "ticker": p.symbol,
             "qty": float(p.qty),
-            "avg_entry_price": float(p.avg_entry_price),
-            "current_price": float(p.current_price),
+            "avg_entry_price": entry,
+            "current_price": current,
             "unrealized_pl": float(p.unrealized_pl),
-            "unrealized_plpc": float(p.unrealized_plpc),
-        }
-        for p in pos
-    ]
+            "unrealized_plpc": unrealized_plpc,
+            "stop_loss": stop_loss,
+            "take_profit": take_profit,
+            "pct_to_stop": pct_to_stop,
+            "pct_to_target": pct_to_target,
+        })
+    return result
 
 @router.get("/quotes")
 def get_quotes():

@@ -11,11 +11,18 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body suppressHydrationWarning style={{ margin: 0, fontFamily: "var(--dash-mono)" }}>
+      <body suppressHydrationWarning style={{ margin: 0, fontFamily: "var(--dash-mono)", overflow: "hidden" }}>
         <Providers>
-          <div style={{ display: "flex", minHeight: "100vh", background: "var(--dash-bg)" }}>
+          <div style={{ display: "flex", height: "100vh", background: "var(--dash-bg)", overflow: "hidden" }}>
             <Sidebar />
-            <main style={{ marginLeft: 220, flex: 1, padding: 24, minHeight: "100vh" }}>
+            <main style={{
+              marginLeft: 220, flex: 1,
+              padding: "16px 20px",
+              height: "100vh",
+              overflow: "hidden",
+              display: "flex",
+              flexDirection: "column",
+            }}>
               {children}
             </main>
           </div>

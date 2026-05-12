@@ -9,6 +9,8 @@ from app.db.redis_client import close_redis
 from app.api.routes import trades, portfolio, news, signals
 from app.ingestion.pipeline import run_ingestion_cycle
 from app.llm.classifier import run_classifier_worker
+from app.broker.position_monitor import check_positions
+
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
@@ -25,8 +27,12 @@ async def lifespan(app: FastAPI):
     async def ingestion_job():
         async with AsyncSessionLocal() as db:
             await run_ingestion_cycle(db)
+    async def position_monitor_job():
+        async with AsyncSessionLocal() as db:
+            await check_positions(db)
 
     scheduler.add_job(ingestion_job, "interval", minutes=15, id="ingestion")
+    scheduler.add_job(position_monitor_job, "interval", minutes=5, id="position_monitor")
     scheduler.start()
     logger.info("scheduler.started")
 

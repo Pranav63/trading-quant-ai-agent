@@ -43,6 +43,10 @@ export interface Position {
   current_price: number
   unrealized_pl: number
   unrealized_plpc: number
+  stop_loss: number
+  take_profit: number
+  pct_to_stop: number
+  pct_to_target: number
 }
 
 export interface Account {

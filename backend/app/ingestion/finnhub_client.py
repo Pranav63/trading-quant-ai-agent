@@ -12,6 +12,7 @@ _rate_limiter = asyncio.Semaphore(1)
 _last_call_time = 0.0
 MIN_INTERVAL = 60.0 / 50  # 1.2 seconds between calls
 
+
 async def _throttled_call(fn, *args, **kwargs):
     global _last_call_time
     async with _rate_limiter:
@@ -19,19 +20,25 @@ async def _throttled_call(fn, *args, **kwargs):
         wait = MIN_INTERVAL - (now - _last_call_time)
         if wait > 0:
             await asyncio.sleep(wait)
-        result = await asyncio.get_event_loop().run_in_executor(None, lambda: fn(*args, **kwargs))
+        result = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: fn(*args, **kwargs)
+        )
         _last_call_time = asyncio.get_event_loop().time()
         return result
+
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=10))
 async def get_company_news(ticker: str, from_date: str, to_date: str) -> list[dict]:
     try:
-        news = await _throttled_call(_client.company_news, ticker, _from=from_date, to=to_date)
+        news = await _throttled_call(
+            _client.company_news, ticker, _from=from_date, to=to_date
+        )
         logger.info("finnhub.news.fetched", ticker=ticker, count=len(news))
         return news
     except Exception as e:
         logger.error("finnhub.news.error", ticker=ticker, error=str(e))
         raise
+
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=10))
 async def get_quote(ticker: str) -> dict:
@@ -41,6 +48,7 @@ async def get_quote(ticker: str) -> dict:
     except Exception as e:
         logger.error("finnhub.quote.error", ticker=ticker, error=str(e))
         raise
+
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=10))
 async def get_earnings_surprise(ticker: str) -> list[dict]:

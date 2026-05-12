@@ -18,11 +18,18 @@ export const getPortfolioHistory = (): Promise<PortfolioHistory> =>
 export const getQuotes = (): Promise<Record<string, number>> =>
   api.get("/api/v1/portfolio/quotes").then(r => r.data)
 
-export const getNews = (): Promise<NewsArticle[]> =>
+// Returns grouped format: { ticker, article_count, latest_at, articles[] }[]
+export const getNews = (): Promise<NewsGroup[]> =>
   api.get("/api/v1/news/recent", { params: { limit: 30 } }).then(r => r.data)
+
+export const getNewsFlat = (): Promise<NewsArticle[]> =>
+  api.get("/api/v1/news/recent/flat", { params: { limit: 60 } }).then(r => r.data)
 
 export const getSignals = (): Promise<Signal[]> =>
   api.get("/api/v1/signals/recent", { params: { limit: 30 } }).then(r => r.data)
+
+export const getSignalConflicts = (): Promise<{ conflicts: { ticker: string, sides: string[] }[], count: number }> =>
+  api.get("/api/v1/signals/conflicts").then(r => r.data)
 
 export const getPendingTrades = (): Promise<Trade[]> =>
   api.get("/api/v1/trades/pending").then(r => r.data)
@@ -35,6 +42,12 @@ export const approveTrade = (id: string): Promise<{ status: string; order_id: st
 
 export const rejectTrade = (id: string): Promise<{ status: string }> =>
   api.post(`/api/v1/trades/${id}/reject`).then(r => r.data)
+
+export const liquidateTrade = (id: string): Promise<{ status: string }> =>
+  api.post(`/api/v1/trades/${id}/liquidate`).then(r => r.data)
+
+export const liquidateAll = (): Promise<{ status: string; closed: any[] }> =>
+  api.post("/api/v1/trades/liquidate-all").then(r => r.data)
 
 export const triggerIngestion = (): Promise<{ status: string }> =>
   api.post("/api/v1/debug/trigger-ingestion").then(r => r.data)
@@ -51,6 +64,13 @@ export interface ActivityEvent {
   label: string
   ts: string
   meta: Record<string, any>
+}
+
+export interface NewsGroup {
+  ticker: string
+  article_count: number
+  latest_at: string
+  articles: NewsArticle[]
 }
 
 export const getActivityFeed = (): Promise<ActivityEvent[]> =>

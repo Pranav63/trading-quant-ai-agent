@@ -4,6 +4,7 @@ from app.core.config import get_settings
 settings = get_settings()
 _redis = None
 
+
 async def get_redis() -> aioredis.Redis:
     global _redis
     if _redis is None:
@@ -13,6 +14,7 @@ async def get_redis() -> aioredis.Redis:
             decode_responses=True,
         )
     return _redis
+
 
 async def close_redis():
     global _redis

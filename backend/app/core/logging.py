@@ -2,6 +2,7 @@ import structlog
 import logging
 from app.core.config import get_settings
 
+
 def setup_logging():
     settings = get_settings()
     logging.basicConfig(level=getattr(logging, settings.log_level))
@@ -14,5 +15,6 @@ def setup_logging():
         wrapper_class=structlog.stdlib.BoundLogger,
         logger_factory=structlog.stdlib.LoggerFactory(),
     )
+
 
 logger = structlog.get_logger()

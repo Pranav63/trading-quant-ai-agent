@@ -5,12 +5,42 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
 from app.db.session import get_db
 from app.models.market import Trade, TradeStatus
-from app.broker.alpaca_client import place_market_order, get_positions
+from app.broker.alpaca_client import place_market_order, get_positions, close_position
 from app.broker.risk_guard import validate_trade, RiskViolation
 from app.core.logging import logger
 from app.core.activity import push_event
+import asyncio
 
 router = APIRouter(prefix="/trades", tags=["trades"])
+
+
+def _calc_stops(
+    side: str,
+    entry: float,
+    atr: float | None,
+    atr_stop_mult: float,
+    atr_tp_mult: float,
+    stop_pct: float,
+    tp_pct: float,
+) -> tuple[float | None, float | None]:
+    """Direction-aware SL/TP calculation. Works for both long and short."""
+    if atr and entry:
+        if side == "buy":
+            sl = round(entry - (atr * atr_stop_mult), 2)
+            tp = round(entry + (atr * atr_tp_mult), 2)
+        else:
+            sl = round(entry + (atr * atr_stop_mult), 2)
+            tp = round(entry - (atr * atr_tp_mult), 2)
+    elif entry:
+        if side == "buy":
+            sl = round(entry * (1 - stop_pct), 2)
+            tp = round(entry * (1 + tp_pct), 2)
+        else:
+            sl = round(entry * (1 + stop_pct), 2)
+            tp = round(entry * (1 - tp_pct), 2)
+    else:
+        sl, tp = None, None
+    return sl, tp
 
 
 @router.get("/pending")
@@ -18,12 +48,17 @@ async def get_pending_trades(db: AsyncSession = Depends(get_db)):
     from app.broker.alpaca_client import data_client, get_account
     from alpaca.data.requests import StockLatestBarRequest
     from alpaca.data.enums import DataFeed
-    from app.broker.position_monitor import ATR_STOP_MULT, ATR_TP_MULT, STOP_LOSS_PCT, TAKE_PROFIT_PCT
+    from app.broker.position_monitor import (
+        ATR_STOP_MULT,
+        ATR_TP_MULT,
+        STOP_LOSS_PCT,
+        TAKE_PROFIT_PCT,
+    )
     from app.indicators.technical import get_daily_bars, compute_atr
-    import asyncio
 
     result = await db.execute(
-        select(Trade).where(Trade.status == TradeStatus.PENDING)
+        select(Trade)
+        .where(Trade.status == TradeStatus.PENDING)
         .order_by(Trade.created_at.desc())
     )
     trades = result.scalars().all()
@@ -42,7 +77,7 @@ async def get_pending_trades(db: AsyncSession = Depends(get_db)):
         acc = get_account()
         equity = float(acc.equity)
     except Exception:
-        equity = 100000.0
+        equity = 100_000.0
 
     output = []
     for t in trades:
@@ -55,44 +90,58 @@ async def get_pending_trades(db: AsyncSession = Depends(get_db)):
         except Exception:
             atr = None
 
-        if atr and current_price:
-            stop_loss   = round(current_price - (atr * ATR_STOP_MULT), 2)
-            take_profit = round(current_price + (atr * ATR_TP_MULT), 2)
-        elif current_price:
-            stop_loss   = round(current_price * (1 - STOP_LOSS_PCT), 2)
-            take_profit = round(current_price * (1 + TAKE_PROFIT_PCT), 2)
-        else:
-            stop_loss = None
-            take_profit = None
+        sl, tp = _calc_stops(
+            t.side,
+            current_price,
+            atr,
+            ATR_STOP_MULT,
+            ATR_TP_MULT,
+            STOP_LOSS_PCT,
+            TAKE_PROFIT_PCT,
+        )
 
-        shares   = round(t.notional / current_price, 4) if current_price and current_price > 0 else None
-        max_loss = round(shares * (current_price - stop_loss), 2) if shares and stop_loss and current_price else None
-        max_gain = round(shares * (take_profit - current_price), 2) if shares and take_profit and current_price else None
+        shares = round(t.notional / current_price, 4) if current_price else None
+        max_loss = (
+            round(abs(shares * (current_price - sl)), 2)
+            if shares and sl and current_price
+            else None
+        )
+        max_gain = (
+            round(abs(shares * (tp - current_price)), 2)
+            if shares and tp and current_price
+            else None
+        )
         risk_pct = round((max_loss / equity) * 100, 2) if max_loss and equity else None
-        rr_ratio = round(max_gain / max_loss, 2) if max_gain and max_loss and max_loss > 0 else None
+        rr_ratio = (
+            round(max_gain / max_loss, 2)
+            if max_gain and max_loss and max_loss > 0
+            else None
+        )
 
-        output.append({
-            "id": str(t.id),
-            "signal_id": str(t.signal_id) if t.signal_id else None,
-            "ticker": t.ticker,
-            "side": t.side,
-            "qty": t.qty,
-            "notional": t.notional,
-            "status": t.status,
-            "alpaca_order_id": t.alpaca_order_id,
-            "filled_price": t.filled_price,
-            "filled_at": t.filled_at.isoformat() if t.filled_at else None,
-            "created_at": t.created_at.isoformat(),
-            "updated_at": t.updated_at.isoformat(),
-            "current_price": current_price or None,
-            "stop_loss": stop_loss,
-            "take_profit": take_profit,
-            "shares": shares,
-            "max_loss": max_loss,
-            "max_gain": max_gain,
-            "risk_pct_of_account": risk_pct,
-            "rr_ratio": rr_ratio,
-        })
+        output.append(
+            {
+                "id": str(t.id),
+                "signal_id": str(t.signal_id) if t.signal_id else None,
+                "ticker": t.ticker,
+                "side": t.side,
+                "qty": t.qty,
+                "notional": t.notional,
+                "status": t.status,
+                "alpaca_order_id": t.alpaca_order_id,
+                "filled_price": t.filled_price,
+                "filled_at": t.filled_at.isoformat() if t.filled_at else None,
+                "created_at": t.created_at.isoformat(),
+                "updated_at": t.updated_at.isoformat(),
+                "current_price": current_price or None,
+                "stop_loss": sl,
+                "take_profit": tp,
+                "shares": shares,
+                "max_loss": max_loss,
+                "max_gain": max_gain,
+                "risk_pct_of_account": risk_pct,
+                "rr_ratio": rr_ratio,
+            }
+        )
     return output
 
 
@@ -103,15 +152,22 @@ async def approve_trade(trade_id: uuid.UUID, db: AsyncSession = Depends(get_db))
     if not trade:
         raise HTTPException(404, "Trade not found")
     if trade.status != TradeStatus.PENDING:
-        raise HTTPException(400, f"Trade already {trade.status.value.lower()} — refresh and try a fresh trade")
+        raise HTTPException(
+            400, f"Trade already {trade.status.value.lower()} — refresh"
+        )
 
+    # Compute current total open notional from Alpaca positions
     positions = get_positions()
+    open_notional = sum(abs(float(p.qty) * float(p.current_price)) for p in positions)
+
     try:
-        validate_trade(trade.ticker, trade.notional, len(positions))
+        validate_trade(trade.ticker, trade.notional, open_notional)
     except RiskViolation as e:
         trade.status = TradeStatus.FAILED
         await db.commit()
-        await push_event("trade_failed", f"risk guard blocked: {str(e)}", {"ticker": trade.ticker})
+        await push_event(
+            "trade_failed", f"risk guard blocked: {str(e)}", {"ticker": trade.ticker}
+        )
         raise HTTPException(400, f"Risk guard blocked: {str(e)}")
 
     try:
@@ -122,10 +178,12 @@ async def approve_trade(trade_id: uuid.UUID, db: AsyncSession = Depends(get_db))
         await db.commit()
         await push_event(
             "trade_approved",
-            f"order submitted: {trade.side.upper()} {trade.ticker} ${trade.notional} — queued on Alpaca",
-            {"ticker": trade.ticker, "order_id": result_order["order_id"]}
+            f"order submitted: {trade.side.upper()} {trade.ticker} ${trade.notional}",
+            {"ticker": trade.ticker, "order_id": result_order["order_id"]},
         )
-        logger.info("trade.executed", trade_id=str(trade_id), order_id=result_order["order_id"])
+        logger.info(
+            "trade.executed", trade_id=str(trade_id), order_id=result_order["order_id"]
+        )
         return {"status": "executed", "order_id": result_order["order_id"]}
     except Exception as e:
         error_msg = str(e)
@@ -134,7 +192,7 @@ async def approve_trade(trade_id: uuid.UUID, db: AsyncSession = Depends(get_db))
         await push_event(
             "trade_failed",
             f"order failed: {trade.side.upper()} {trade.ticker} — {error_msg[:80]}",
-            {"ticker": trade.ticker, "error": error_msg}
+            {"ticker": trade.ticker},
         )
         logger.error("trade.failed", trade_id=str(trade_id), error=error_msg)
         raise HTTPException(500, f"Alpaca rejected: {error_msg}")
@@ -150,10 +208,84 @@ async def reject_trade(trade_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     await db.commit()
     await push_event(
         "trade_rejected",
-        f"trade rejected: {trade.side.upper()} {trade.ticker} ${trade.notional}",
-        {"ticker": trade.ticker}
+        f"trade rejected: {trade.side.upper()} {trade.ticker}",
+        {"ticker": trade.ticker},
     )
     return {"status": "rejected"}
+
+
+@router.post("/{trade_id}/liquidate")
+async def liquidate_trade(trade_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    """Close a single position immediately via Alpaca."""
+    result = await db.execute(select(Trade).where(Trade.id == trade_id))
+    trade = result.scalar_one_or_none()
+    if not trade:
+        raise HTTPException(404, "Trade not found")
+    if trade.status != TradeStatus.EXECUTED:
+        raise HTTPException(400, "Can only liquidate an executed trade")
+
+    try:
+        close_result = close_position(trade.ticker)
+        trade.status = TradeStatus.REJECTED  # mark closed
+        await db.commit()
+        await push_event(
+            "trade_liquidated",
+            f"LIQUIDATED {trade.ticker} — manual close",
+            {"ticker": trade.ticker},
+        )
+        logger.info("trade.liquidated", ticker=trade.ticker, trade_id=str(trade_id))
+        return {"status": "liquidated", "detail": close_result}
+    except Exception as e:
+        logger.error("trade.liquidate.failed", ticker=trade.ticker, error=str(e))
+        raise HTTPException(500, f"Liquidate failed: {str(e)}")
+
+
+@router.post("/liquidate-all")
+async def liquidate_all(db: AsyncSession = Depends(get_db)):
+    """Close ALL open positions immediately."""
+    positions = get_positions()
+    if not positions:
+        return {"status": "no_positions", "closed": []}
+
+    results = []
+    for pos in positions:
+        ticker = pos.symbol
+        try:
+            close_result = close_position(ticker)
+            results.append(
+                {"ticker": ticker, "status": "closed", "detail": close_result}
+            )
+            await push_event(
+                "trade_liquidated",
+                f"LIQUIDATED {ticker} — bulk close",
+                {"ticker": ticker},
+            )
+            logger.info("trade.liquidate_all.closed", ticker=ticker)
+        except Exception as e:
+            results.append({"ticker": ticker, "status": "failed", "error": str(e)})
+            logger.error("trade.liquidate_all.failed", ticker=ticker, error=str(e))
+
+    # Mark all executed trades for these tickers as closed in DB
+    tickers_closed = [r["ticker"] for r in results if r["status"] == "closed"]
+    if tickers_closed:
+        executed = await db.execute(
+            select(Trade).where(
+                and_(
+                    Trade.ticker.in_(tickers_closed),
+                    Trade.status == TradeStatus.EXECUTED,
+                )
+            )
+        )
+        for t in executed.scalars().all():
+            t.status = TradeStatus.REJECTED
+        await db.commit()
+
+    await push_event(
+        "liquidate_all",
+        f"bulk liquidation: {len(tickers_closed)} positions closed",
+        {"count": len(tickers_closed)},
+    )
+    return {"status": "done", "closed": results}
 
 
 @router.get("/history")
@@ -167,11 +299,14 @@ async def get_trade_history(limit: int = 50, db: AsyncSession = Depends(get_db))
 @router.get("/recently-failed")
 async def get_recently_failed(db: AsyncSession = Depends(get_db)):
     result = await db.execute(
-        select(Trade).where(
+        select(Trade)
+        .where(
             and_(
                 Trade.status == TradeStatus.FAILED,
-                Trade.updated_at > datetime.now(timezone.utc) - timedelta(hours=2)
+                Trade.updated_at > datetime.now(timezone.utc) - timedelta(hours=2),
             )
-        ).order_by(Trade.updated_at.desc()).limit(10)
+        )
+        .order_by(Trade.updated_at.desc())
+        .limit(10)
     )
     return result.scalars().all()

@@ -6,8 +6,11 @@ from app.core.logging import logger
 settings = get_settings()
 BASE_URL = "https://newsapi.org/v2"
 
+
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=10))
-async def get_top_business_headlines(query: str = None, page_size: int = 20) -> list[dict]:
+async def get_top_business_headlines(
+    query: str = None, page_size: int = 20
+) -> list[dict]:
     params = {
         "apiKey": settings.newsapi_key,
         "category": "business",
@@ -28,6 +31,7 @@ async def get_top_business_headlines(query: str = None, page_size: int = 20) -> 
         except Exception as e:
             logger.error("newsapi.headlines.error", error=str(e))
             raise
+
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=10))
 async def search_news(query: str, page_size: int = 10) -> list[dict]:

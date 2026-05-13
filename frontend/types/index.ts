@@ -72,6 +72,3 @@ export interface PortfolioHistory {
   profit_loss: number[]
   profit_loss_pct: number[]
 }
-
-export const getRecentlyFailed = (): Promise<Trade[]> =>
-  api.get("/api/v1/trades/recently-failed").then(r => r.data)

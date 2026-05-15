@@ -29,7 +29,6 @@ pgdata/
 redisdata/
 
 # alembic generated versions (keep the folder, ignore generated files)
-backend/alembic/versions/*.py
 
 # OS
 .DS_Store

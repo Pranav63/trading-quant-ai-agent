@@ -419,7 +419,7 @@ export default function DashboardPage() {
     queryKey: ["signals"],
     queryFn: getSignals,
   });
-  const { data: news } = useQuery({ queryKey: ["news"], queryFn: getNews });
+  const { data: newsData } = useQuery({ queryKey: ["news"], queryFn: getNews })
   const { data: quotes } = useQuery({
     queryKey: ["quotes"],
     queryFn: getQuotes,
@@ -444,7 +444,7 @@ export default function DashboardPage() {
   const equity = account?.portfolio_value ?? 0;
 
   // Flatten grouped news for dashboard preview
-  const newsFlat = news?.flatMap((g) => g.articles.slice(0, 2)) ?? [];
+const newsFlat = newsData?.groups?.flatMap((g) => g.articles.slice(0, 2)) ?? [];
 
   return (
     <>

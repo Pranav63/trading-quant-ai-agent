@@ -1,4 +1,5 @@
 from pydantic_settings import BaseSettings
+from pydantic import field_validator
 from functools import lru_cache
 from pathlib import Path
 
@@ -25,6 +26,13 @@ class Settings(BaseSettings):
 
     env: str = "development"
     log_level: str = "INFO"
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def fix_db_url(cls, v: str) -> str:
+        v = v.replace("postgres://", "postgresql+asyncpg://")
+        v = v.replace("postgresql://", "postgresql+asyncpg://")
+        return v
 
     model_config = {
         "env_file": str(ENV_FILE),

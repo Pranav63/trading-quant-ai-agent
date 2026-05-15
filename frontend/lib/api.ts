@@ -18,12 +18,51 @@ export const getPortfolioHistory = (): Promise<PortfolioHistory> =>
 export const getQuotes = (): Promise<Record<string, number>> =>
   api.get("/api/v1/portfolio/quotes").then(r => r.data)
 
-// Returns grouped format: { ticker, article_count, latest_at, articles[] }[]
-export const getNews = (): Promise<NewsGroup[]> =>
-  api.get("/api/v1/news/recent", { params: { limit: 30 } }).then(r => r.data)
+// Grouped format with pagination
+export const getNews = (before?: string): Promise<{ groups: NewsGroup[]; next_cursor: string | null; has_more: boolean }> =>
+  api.get("/api/v1/news/recent", { params: { limit: 30, ...(before && { before }) } }).then(r => r.data)
 
-export const getNewsFlat = (): Promise<NewsArticle[]> =>
-  api.get("/api/v1/news/recent/flat", { params: { limit: 60 } }).then(r => r.data)
+// Flat format with pagination — response is now { articles: [], next_cursor, has_more }
+export const getNewsFlat = (before?: string): Promise<{ articles: NewsArticle[]; next_cursor: string | null; has_more: boolean }> =>
+  api.get("/api/v1/news/recent/flat", { params: { limit: 60, ...(before && { before }) } }).then(r => r.data)
+
+/**
+ * Creates an SSE connection to the news stream.
+ * Returns the EventSource so the caller can close it on cleanup.
+ *
+ * Usage:
+ *   const es = createNewsStream(
+ *     (articles) => setArticles(prev => [...articles, ...prev]),
+ *     (articles) => setArticles(prev => [...articles, ...prev].slice(0, 200))
+ *   )
+ *   return () => es.close()
+ */
+export const createNewsStream = (
+  onInit: (articles: NewsArticle[]) => void,
+  onArticles: (articles: NewsArticle[]) => void,
+  onError?: (e: Event) => void,
+): EventSource => {
+  const baseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
+  const es = new EventSource(`${baseUrl}/api/v1/news/stream`)
+
+  es.addEventListener("init", (e: MessageEvent) => {
+    onInit(JSON.parse(e.data))
+  })
+
+  es.addEventListener("articles", (e: MessageEvent) => {
+    onArticles(JSON.parse(e.data))
+  })
+
+  es.addEventListener("heartbeat", () => {
+    // connection alive — no action needed
+  })
+
+  if (onError) {
+    es.onerror = onError
+  }
+
+  return es
+}
 
 export const getSignals = (): Promise<Signal[]> =>
   api.get("/api/v1/signals/recent", { params: { limit: 30 } }).then(r => r.data)
@@ -55,6 +94,9 @@ export const triggerIngestion = (): Promise<{ status: string }> =>
 export const getRecentlyFailed = (): Promise<Trade[]> =>
   api.get("/api/v1/trades/recently-failed").then(r => r.data)
 
+export const getActivityFeed = (): Promise<ActivityEvent[]> =>
+  api.get("/api/v1/activity/feed").then(r => r.data)
+
 export interface ActivityEvent {
   id: string
   type: string
@@ -72,6 +114,3 @@ export interface NewsGroup {
   latest_at: string
   articles: NewsArticle[]
 }
-
-export const getActivityFeed = (): Promise<ActivityEvent[]> =>
-  api.get("/api/v1/activity/feed").then(r => r.data)

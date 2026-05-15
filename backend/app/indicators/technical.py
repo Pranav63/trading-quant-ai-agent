@@ -1,13 +1,14 @@
 """
 Technical indicator confirmation layer.
 Uses hourly bars for RSI/EMA, daily bars for ATR.
-Bar data via yfinance (Alpaca IEX/SIP not available on paper accounts).
+ETFs: yfinance. Crypto: yfinance with BTC-USD format (works fine).
 Cached 15 minutes per ticker.
 """
 import pandas as pd
 import threading
 from datetime import datetime, timezone, timedelta
 from app.core.config import get_settings
+from app.core.watchlist import yf_ticker
 from app.core.logging import logger
 
 settings = get_settings()
@@ -37,22 +38,14 @@ def clear_bar_cache():
 
 
 def _yf_to_bars(df: pd.DataFrame) -> list[dict]:
-    """Flatten yfinance DataFrame (handles MultiIndex columns) to bar dicts."""
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
     return [
-        {
-            "open":   float(row.Open),
-            "high":   float(row.High),
-            "low":    float(row.Low),
-            "close":  float(row.Close),
-            "volume": float(row.Volume),
-        }
+        {"open": float(row.Open), "high": float(row.High),
+         "low": float(row.Low), "close": float(row.Close), "volume": float(row.Volume)}
         for row in df.itertuples()
     ]
 
-
-# ── Bar fetchers ──────────────────────────────────────────────────────────────
 
 def get_daily_bars(ticker: str, days: int = 30) -> list[dict]:
     key = f"{ticker}:day:{days}"
@@ -61,21 +54,16 @@ def get_daily_bars(ticker: str, days: int = 30) -> list[dict]:
         return cached
     try:
         import yfinance as yf
-        end   = datetime.now(timezone.utc)
+        yf_sym = yf_ticker(ticker)  # BTC/USD -> BTC-USD
+        end = datetime.now(timezone.utc)
         start = end - timedelta(days=days)
-        df    = yf.download(
-            ticker,
-            start=start.strftime("%Y-%m-%d"),
-            end=end.strftime("%Y-%m-%d"),
-            progress=False,
-            auto_adjust=True,
-        )
+        df = yf.download(yf_sym, start=start.strftime("%Y-%m-%d"),
+                         end=end.strftime("%Y-%m-%d"), progress=False, auto_adjust=True)
         if df.empty:
             logger.warning("indicators.daily_bars.empty", ticker=ticker)
             return []
         result = _yf_to_bars(df)
         _set_cached(key, result)
-        logger.info("indicators.daily_bars.fetched", ticker=ticker, count=len(result))
         return result
     except Exception as e:
         logger.error("indicators.daily_bars.error", ticker=ticker, error=str(e))
@@ -89,30 +77,24 @@ def get_hourly_bars(ticker: str, days: int = 10) -> list[dict]:
         return cached
     try:
         import yfinance as yf
-        end   = datetime.now(timezone.utc)
+        yf_sym = yf_ticker(ticker)  # BTC/USD -> BTC-USD
+        end = datetime.now(timezone.utc)
         start = end - timedelta(days=days)
-        df    = yf.download(
-            ticker,
-            start=start.strftime("%Y-%m-%d"),
-            end=end.strftime("%Y-%m-%d"),
-            interval="1h",
-            progress=False,
-            auto_adjust=True,
-        )
+        df = yf.download(yf_sym, start=start.strftime("%Y-%m-%d"),
+                         end=end.strftime("%Y-%m-%d"), interval="1h",
+                         progress=False, auto_adjust=True)
         if df.empty:
             logger.warning("indicators.hourly_bars.empty", ticker=ticker)
             return []
         result = _yf_to_bars(df)
         _set_cached(key, result)
-        logger.info("indicators.hourly_bars.fetched", ticker=ticker, count=len(result))
         return result
     except Exception as e:
         logger.error("indicators.hourly_bars.error", ticker=ticker, error=str(e))
         return []
 
 
-# ── Indicator math ────────────────────────────────────────────────────────────
-
+# All indicator math functions unchanged — paste from your existing file
 def compute_rsi(closes: list[float], period: int = 14) -> float | None:
     if len(closes) < period + 1:
         return None
@@ -172,13 +154,9 @@ def check_volume_spike(daily_bars: list[dict], lookback: int = 20) -> bool:
 
 
 def compute_buy_pressure(bars: list[dict]) -> float:
-    """
-    Bar-level buy/sell pressure proxy.
-    Close > open = buying bar. Returns buy_pct 0–100.
-    """
     if not bars:
         return 50.0
-    buy_vol  = sum(b["volume"] for b in bars if b["close"] > b["open"])
+    buy_vol = sum(b["volume"] for b in bars if b["close"] > b["open"])
     sell_vol = sum(b["volume"] for b in bars if b["close"] < b["open"])
     total = buy_vol + sell_vol
     if total == 0:
@@ -186,29 +164,17 @@ def compute_buy_pressure(bars: list[dict]) -> float:
     return round((buy_vol / total) * 100, 1)
 
 
-# ── Main confirmation function ────────────────────────────────────────────────
-
 def confirm_signal(ticker: str, signal_type: str) -> dict:
-    """
-    Multi-timeframe signal confirmation.
-    Hard fails on any data error — no silent confirmed=True pass-throughs.
-    """
     FAIL = {
-        "confirmed": False,
-        "indicator_score": 0.0,
-        "atr": None,
-        "atr_pct": None,
-        "stop_loss_distance": None,
-        "buy_pressure_pct": None,
-        "details": {},
+        "confirmed": False, "indicator_score": 0.0, "atr": None,
+        "atr_pct": None, "stop_loss_distance": None,
+        "buy_pressure_pct": None, "details": {},
     }
-
     try:
         hourly = get_hourly_bars(ticker, days=10)
         daily  = get_daily_bars(ticker, days=30)
 
         if not hourly or not daily:
-            logger.warning("indicators.no_bars", ticker=ticker)
             FAIL["details"] = {"reason": "no bar data returned"}
             return FAIL
 
@@ -231,84 +197,75 @@ def confirm_signal(ticker: str, signal_type: str) -> dict:
         rsi_ok = False
         if rsi is not None:
             total += 1
-            if signal_type == "BUY"  and rsi < 65: rsi_ok = True; votes += 1
-            elif signal_type == "SELL" and rsi > 40: rsi_ok = True; votes += 1
+            if signal_type == "BUY" and rsi < 65:
+                rsi_ok = True; votes += 1
+            elif signal_type == "SELL" and rsi > 40:
+                rsi_ok = True; votes += 1
 
         ema_ok = False
         if ema9 and ema21:
             total += 1
-            if signal_type == "BUY"  and ema9 > ema21: ema_ok = True; votes += 1
-            elif signal_type == "SELL" and ema9 < ema21: ema_ok = True; votes += 1
+            if signal_type == "BUY" and ema9 > ema21:
+                ema_ok = True; votes += 1
+            elif signal_type == "SELL" and ema9 < ema21:
+                ema_ok = True; votes += 1
 
         wav_ok = False
         if wav_price:
             total += 1
-            if signal_type == "BUY"  and current_price > wav_price: wav_ok = True; votes += 1
-            elif signal_type == "SELL" and current_price < wav_price: wav_ok = True; votes += 1
+            if signal_type == "BUY" and current_price > wav_price:
+                wav_ok = True; votes += 1
+            elif signal_type == "SELL" and current_price < wav_price:
+                wav_ok = True; votes += 1
 
         pressure_ok = False
         total += 1
-        if signal_type == "BUY"  and buy_pct >= 55: pressure_ok = True; votes += 1
-        elif signal_type == "SELL" and buy_pct <= 45: pressure_ok = True; votes += 1
+        if signal_type == "BUY" and buy_pct >= 55:
+            pressure_ok = True; votes += 1
+        elif signal_type == "SELL" and buy_pct <= 45:
+            pressure_ok = True; votes += 1
 
         if vol_spike:
             votes += 1
             total += 1
 
-        atr_veto        = False
+        # Crypto gets relaxed ATR veto — BTC regularly has >3% ATR
+        from app.core.watchlist import is_crypto
+        atr_veto = False
         atr_veto_reason = None
         if atr_pct is not None:
-            if atr_pct > 3.0:
+            atr_ceiling = 8.0 if is_crypto(ticker) else 3.0
+            if atr_pct > atr_ceiling:
                 atr_veto = True
-                atr_veto_reason = f"ATR {atr_pct:.2f}% too high — panic conditions"
+                atr_veto_reason = f"ATR {atr_pct:.2f}% too high — extreme volatility"
             elif atr_pct < 0.2:
                 atr_veto = True
                 atr_veto_reason = f"ATR {atr_pct:.2f}% too low — no movement"
 
-        indicator_score     = votes / total if total > 0 else 0.0
-        confirmed           = (votes >= 2) and not atr_veto
-        stop_loss_distance  = round(atr * 2, 2) if atr else None
+        indicator_score    = votes / total if total > 0 else 0.0
+        confirmed          = (votes >= 2) and not atr_veto
+        stop_loss_distance = round(atr * 2, 2) if atr else None
 
         details = {
-            "rsi":                round(rsi, 1)        if rsi       else None,
-            "rsi_ok":             rsi_ok,
-            "ema9_hourly":        round(ema9, 2)        if ema9      else None,
-            "ema21_hourly":       round(ema21, 2)       if ema21     else None,
-            "ema_ok":             ema_ok,
-            "weighted_avg_price": round(wav_price, 2)   if wav_price else None,
-            "wav_ok":             wav_ok,
-            "buy_pressure_pct":   buy_pct,
-            "pressure_ok":        pressure_ok,
-            "atr_daily":          round(atr, 3)         if atr       else None,
-            "atr_pct":            round(atr_pct, 2)     if atr_pct   else None,
-            "atr_veto":           atr_veto,
-            "atr_veto_reason":    atr_veto_reason,
+            "rsi": round(rsi, 1) if rsi else None, "rsi_ok": rsi_ok,
+            "ema9_hourly": round(ema9, 2) if ema9 else None,
+            "ema21_hourly": round(ema21, 2) if ema21 else None, "ema_ok": ema_ok,
+            "weighted_avg_price": round(wav_price, 2) if wav_price else None, "wav_ok": wav_ok,
+            "buy_pressure_pct": buy_pct, "pressure_ok": pressure_ok,
+            "atr_daily": round(atr, 3) if atr else None,
+            "atr_pct": round(atr_pct, 2) if atr_pct else None,
+            "atr_veto": atr_veto, "atr_veto_reason": atr_veto_reason,
             "stop_loss_distance": stop_loss_distance,
-            "volume_spike":       vol_spike,
-            "votes":              votes,
-            "total":              total,
-            "indicator_score":    round(indicator_score, 2),
+            "volume_spike": vol_spike, "votes": votes, "total": total,
+            "indicator_score": round(indicator_score, 2),
         }
-
-        logger.info(
-            "indicators.result",
-            ticker=ticker, signal=signal_type,
-            confirmed=confirmed, votes=votes, total=total,
-            buy_pressure_pct=buy_pct,
-            atr_pct=round(atr_pct, 2) if atr_pct else None,
-            atr_veto=atr_veto,
-        )
 
         return {
-            "confirmed":          confirmed,
-            "indicator_score":    indicator_score,
-            "atr":                atr,
-            "atr_pct":            atr_pct,
+            "confirmed": confirmed, "indicator_score": indicator_score,
+            "atr": atr, "atr_pct": atr_pct,
             "stop_loss_distance": stop_loss_distance,
-            "buy_pressure_pct":   buy_pct,
-            "details":            details,
+            "buy_pressure_pct": buy_pct, "details": details,
         }
-
     except Exception as e:
         logger.error("indicators.error", ticker=ticker, error=str(e))
         FAIL["details"] = {"reason": f"exception: {str(e)}"}

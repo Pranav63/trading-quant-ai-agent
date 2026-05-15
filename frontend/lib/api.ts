@@ -114,3 +114,53 @@ export interface NewsGroup {
   latest_at: string
   articles: NewsArticle[]
 }
+
+export interface NewsCluster {
+  ticker: string
+  signal_class: string
+  source_count: number
+  sources: string[]
+  article_count: number
+  latest_at: string
+  articles: NewsArticle[]
+}
+
+export const getNewsClusters = (hours = 6): Promise<{ clusters: NewsCluster[]; total: number }> =>
+  api.get("/api/v1/news/clusters", { params: { hours, min_sources: 2 } }).then(r => r.data)
+
+export interface MacroIndicator {
+  id: string
+  label: string
+  unit: string
+  value: number | null
+  prev: number | null
+  change: number | null
+  date: string | null
+}
+
+export const getMacroStrip = (): Promise<{ indicators: MacroIndicator[] }> =>
+  api.get("/api/v1/macro/strip").then(r => r.data)
+
+export interface MarketBrief {
+  brief: string
+  dominant_theme: string
+  affected_etfs: string[]
+  generated_at: string | null
+  article_count: number
+  provider?: string
+}
+
+export const getMarketBrief = (): Promise<MarketBrief> =>
+  api.get("/api/v1/brief").then(r => r.data)
+
+export const triggerBrief = (): Promise<MarketBrief> =>
+  api.post("/api/v1/brief/generate").then(r => r.data)
+
+export interface WatchlistItem {
+  ticker: string
+  description: string
+  type: "etf" | "crypto"
+}
+
+export const getWatchlist = (): Promise<WatchlistItem[]> =>
+  api.get("/api/v1/watchlist").then(r => r.data)

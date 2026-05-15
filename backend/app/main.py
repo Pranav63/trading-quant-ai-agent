@@ -6,7 +6,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from app.core.logging import setup_logging
 from app.db.session import AsyncSessionLocal, engine, Base, get_db
 from app.db.redis_client import close_redis
-from app.api.routes import trades, portfolio, news, signals
+from app.api.routes import trades, portfolio, news, signals, macro, brief, watchlist
+
 from app.ingestion.pipeline import run_ingestion_cycle
 from app.llm.classifier import run_classifier_worker
 from app.broker.position_monitor import check_positions
@@ -69,6 +70,10 @@ app.include_router(trades.router, prefix="/api/v1")
 app.include_router(portfolio.router, prefix="/api/v1")
 app.include_router(news.router, prefix="/api/v1")
 app.include_router(signals.router, prefix="/api/v1")
+app.include_router(macro.router, prefix="/api/v1")
+app.include_router(brief.router, prefix="/api/v1")
+app.include_router(watchlist.router, prefix="/api/v1")
+
 
 
 @app.get("/health")

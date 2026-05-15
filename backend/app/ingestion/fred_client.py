@@ -63,6 +63,18 @@ FRED_SERIES = [
         "etf_hint": "TLT",
         "description": "Market-implied 10-year inflation expectation",
     },
+    {
+    "series_id": "VIXCLS",
+    "name": "VIX",
+    "etf_hint": "GLD",
+    "description": "CBOE Volatility Index — market fear gauge",
+},
+{
+    "series_id": "T10Y2Y",
+    "name": "10Y-2Y Spread",
+    "etf_hint": "TLT",
+    "description": "Treasury yield curve spread — recession indicator",
+},
 ]
 
 

@@ -18,6 +18,8 @@ from app.db.session import AsyncSessionLocal
 from app.models.market import Signal, Trade, SignalType, TradeStatus
 from app.broker.risk_guard import compute_notional
 from app.indicators.technical import confirm_signal
+from app.core.watchlist import WATCHLIST_CONTEXT
+
 
 settings = get_settings()
 groq_client = AsyncGroq(api_key=settings.groq_api_key)
@@ -27,42 +29,23 @@ GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0
 CLASSIFY_QUEUE_KEY = "queue:classify"
 PROCESSED_SET_KEY = "processed:articles"
 
-WATCHLIST_CONTEXT = """
-Our trading universe is sector ETFs only:
-- SPY: S&P 500 broad market
-- QQQ: Nasdaq / tech heavy
-- XLK: Technology sector
-- XLF: Financial sector
-- XLE: Energy sector
-- XLV: Healthcare sector
-- XLI: Industrials sector
-- GLD: Gold (safe haven)
-- TLT: Long-term treasuries (safe haven, inverse risk)
-
-Strategy: sector rotation based on macro events.
-When risk-off signals appear (war, recession fears, inflation) → GLD, TLT.
-When tech optimism → QQQ, XLK.
-When energy supply shock → XLE.
-When broad market bullish → SPY.
-"""
-
-SYSTEM_PROMPT = f"""You are a brutally honest quantitative trading signal classifier for a sector ETF rotation strategy.
+SYSTEM_PROMPT = f"""You are a brutally honest quantitative trading signal classifier for a sector ETF and crypto rotation strategy.
 
 {WATCHLIST_CONTEXT}
 
 Your job is to protect capital first, generate returns second. You must be ruthlessly critical of every headline — most news is noise and should be ignored.
 
 HONESTY RULES — non-negotiable:
-- Never force a signal. If the news is ambiguous, vague, or only loosely related to our ETFs, return actionable: false.
+- Never force a signal. If the news is ambiguous, vague, or only loosely related to our assets, return actionable: false.
 - Never round up confidence. If you are 60% sure, say 0.60 — not 0.75.
 - Never signal just because a headline sounds dramatic. Wars, politics, and CEO drama are usually priced in.
-- A signal must have a DIRECT, MECHANISTIC link to one of our ETFs. "General uncertainty" is not a reason to buy GLD — only if the article explicitly describes inflation, safe-haven flows, or dollar weakness.
-- If two ETFs are equally affected, pick the more directly exposed one. Never signal both just to hedge your answer.
-- Contradict yourself if needed — if earlier context suggested BUY but this article is bearish, say SELL.
+- A signal must have a DIRECT, MECHANISTIC link to one of our assets. "General uncertainty" is not a reason to buy GLD — only if the article explicitly describes inflation, safe-haven flows, or dollar weakness.
+- BTC/USD signals require macro crypto catalysts (ETF flows, regulatory news, Fed rate decisions) — not generic "crypto rises" headlines.
+- If two assets are equally affected, pick the more directly exposed one.
 
 Given a news headline and summary, you must:
 1. Ask yourself: would a senior portfolio manager at a quant fund act on this? If not, return actionable: false.
-2. If yes, identify which single ETF is MOST directly affected.
+2. If yes, identify which single asset is MOST directly affected.
 3. Assign confidence based only on how clear and direct the causal link is.
 
 Respond ONLY with valid JSON in this exact format:
@@ -73,18 +56,17 @@ Respond ONLY with valid JSON in this exact format:
       "ticker": "XLE",
       "signal": "BUY",
       "confidence": 0.75,
-      "reasoning": "One sentence — state the exact causal mechanism, not just sentiment"
+      "reasoning": "One sentence — state the exact causal mechanism"
     }}
   ]
 }}
 
 Rules:
 - If not actionable, return {{"actionable": false, "signals": []}}
-- confidence must be between 0.5 and 1.0 — never signal below 0.5
-- Maximum 2 tickers per article — usually 1 is correct
-- signal must be BUY or SELL only — never HOLD
+- confidence must be between 0.5 and 1.0
+- Maximum 2 tickers per article
+- signal must be BUY or SELL only
 - Never emit BUY and SELL for the same ticker in one response
-- Reasoning must state the mechanism — "Oil supply cut raises energy prices benefiting XLE producers" not "energy sector impacted"
 - Be conservative — if in doubt, do not signal
 """
 

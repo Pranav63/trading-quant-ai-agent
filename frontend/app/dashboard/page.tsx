@@ -419,7 +419,10 @@ export default function DashboardPage() {
     queryKey: ["signals"],
     queryFn: getSignals,
   });
-  const { data: newsData } = useQuery({ queryKey: ["news"], queryFn: getNews })
+  const { data: newsData } = useQuery({ 
+  queryKey: ["news"], 
+  queryFn: () => getNews() 
+})
   const { data: quotes } = useQuery({
     queryKey: ["quotes"],
     queryFn: getQuotes,

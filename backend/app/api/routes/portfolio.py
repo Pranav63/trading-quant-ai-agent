@@ -21,7 +21,12 @@ def account_summary():
 @router.get("/positions")
 def positions():
     from app.indicators.technical import get_daily_bars, compute_atr
-    from app.broker.position_monitor import ATR_STOP_MULT, ATR_TP_MULT, STOP_LOSS_PCT, TAKE_PROFIT_PCT
+    from app.broker.position_monitor import (
+        ATR_STOP_MULT,
+        ATR_TP_MULT,
+        STOP_LOSS_PCT,
+        TAKE_PROFIT_PCT,
+    )
 
     pos_list = get_positions()
     result = []
@@ -37,27 +42,29 @@ def positions():
             atr = None
 
         if atr:
-            stop_loss   = round(entry - (atr * ATR_STOP_MULT), 2)
+            stop_loss = round(entry - (atr * ATR_STOP_MULT), 2)
             take_profit = round(entry + (atr * ATR_TP_MULT), 2)
         else:
-            stop_loss   = round(entry * (1 - STOP_LOSS_PCT), 2)
+            stop_loss = round(entry * (1 - STOP_LOSS_PCT), 2)
             take_profit = round(entry * (1 + TAKE_PROFIT_PCT), 2)
 
-        pct_to_stop   = round((current - stop_loss) / current * 100, 2)
+        pct_to_stop = round((current - stop_loss) / current * 100, 2)
         pct_to_target = round((take_profit - current) / current * 100, 2)
 
-        result.append({
-            "ticker": p.symbol,
-            "qty": float(p.qty),
-            "avg_entry_price": entry,
-            "current_price": current,
-            "unrealized_pl": float(p.unrealized_pl),
-            "unrealized_plpc": unrealized_plpc,
-            "stop_loss": stop_loss,
-            "take_profit": take_profit,
-            "pct_to_stop": pct_to_stop,
-            "pct_to_target": pct_to_target,
-        })
+        result.append(
+            {
+                "ticker": p.symbol,
+                "qty": float(p.qty),
+                "avg_entry_price": entry,
+                "current_price": current,
+                "unrealized_pl": float(p.unrealized_pl),
+                "unrealized_plpc": unrealized_plpc,
+                "stop_loss": stop_loss,
+                "take_profit": take_profit,
+                "pct_to_stop": pct_to_stop,
+                "pct_to_target": pct_to_target,
+            }
+        )
     return result
 
 

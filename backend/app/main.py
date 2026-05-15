@@ -75,7 +75,6 @@ app.include_router(brief.router, prefix="/api/v1")
 app.include_router(watchlist.router, prefix="/api/v1")
 
 
-
 @app.get("/health")
 def health():
     return {"status": "ok"}

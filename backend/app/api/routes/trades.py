@@ -42,30 +42,44 @@ def _calc_stops(
         sl, tp = None, None
     return sl, tp
 
+
 @router.get("/pending")
 async def get_pending_trades(db: AsyncSession = Depends(get_db)):
-    from app.broker.alpaca_client import stock_data_client, crypto_data_client, get_account
+    from app.broker.alpaca_client import (
+        stock_data_client,
+        crypto_data_client,
+        get_account,
+    )
     from alpaca.data.requests import StockLatestBarRequest, CryptoLatestBarRequest
     from alpaca.data.enums import DataFeed
-    from app.broker.position_monitor import ATR_STOP_MULT, ATR_TP_MULT, STOP_LOSS_PCT, TAKE_PROFIT_PCT
+    from app.broker.position_monitor import (
+        ATR_STOP_MULT,
+        ATR_TP_MULT,
+        STOP_LOSS_PCT,
+        TAKE_PROFIT_PCT,
+    )
     from app.indicators.technical import get_daily_bars, compute_atr
     from app.core.watchlist import is_crypto
 
     result = await db.execute(
-        select(Trade).where(Trade.status == TradeStatus.PENDING).order_by(Trade.created_at.desc())
+        select(Trade)
+        .where(Trade.status == TradeStatus.PENDING)
+        .order_by(Trade.created_at.desc())
     )
     trades = result.scalars().all()
     if not trades:
         return []
 
     tickers = list(set(t.ticker for t in trades))
-    stock_tickers  = [t for t in tickers if not is_crypto(t)]
+    stock_tickers = [t for t in tickers if not is_crypto(t)]
     crypto_tickers = [t for t in tickers if is_crypto(t)]
 
     prices = {}
     try:
         if stock_tickers:
-            req = StockLatestBarRequest(symbol_or_symbols=stock_tickers, feed=DataFeed.IEX)
+            req = StockLatestBarRequest(
+                symbol_or_symbols=stock_tickers, feed=DataFeed.IEX
+            )
             bars = stock_data_client.get_stock_latest_bar(req)
             prices.update({sym: float(b.close) for sym, b in bars.items()})
     except Exception:
@@ -95,24 +109,57 @@ async def get_pending_trades(db: AsyncSession = Depends(get_db)):
         except Exception:
             atr = None
 
-        sl, tp = _calc_stops(t.side, current_price, atr, ATR_STOP_MULT, ATR_TP_MULT, STOP_LOSS_PCT, TAKE_PROFIT_PCT)
-        shares   = round(t.notional / current_price, 4) if current_price else None
-        max_loss = round(abs(shares * (current_price - sl)), 2) if shares and sl and current_price else None
-        max_gain = round(abs(shares * (tp - current_price)), 2) if shares and tp and current_price else None
+        sl, tp = _calc_stops(
+            t.side,
+            current_price,
+            atr,
+            ATR_STOP_MULT,
+            ATR_TP_MULT,
+            STOP_LOSS_PCT,
+            TAKE_PROFIT_PCT,
+        )
+        shares = round(t.notional / current_price, 4) if current_price else None
+        max_loss = (
+            round(abs(shares * (current_price - sl)), 2)
+            if shares and sl and current_price
+            else None
+        )
+        max_gain = (
+            round(abs(shares * (tp - current_price)), 2)
+            if shares and tp and current_price
+            else None
+        )
         risk_pct = round((max_loss / equity) * 100, 2) if max_loss and equity else None
-        rr_ratio = round(max_gain / max_loss, 2) if max_gain and max_loss and max_loss > 0 else None
+        rr_ratio = (
+            round(max_gain / max_loss, 2)
+            if max_gain and max_loss and max_loss > 0
+            else None
+        )
 
-        output.append({
-            "id": str(t.id), "signal_id": str(t.signal_id) if t.signal_id else None,
-            "ticker": t.ticker, "side": t.side, "qty": t.qty, "notional": t.notional,
-            "status": t.status, "alpaca_order_id": t.alpaca_order_id,
-            "filled_price": t.filled_price,
-            "filled_at": t.filled_at.isoformat() if t.filled_at else None,
-            "created_at": t.created_at.isoformat(), "updated_at": t.updated_at.isoformat(),
-            "current_price": current_price or None, "stop_loss": sl, "take_profit": tp,
-            "shares": shares, "max_loss": max_loss, "max_gain": max_gain,
-            "risk_pct_of_account": risk_pct, "rr_ratio": rr_ratio,
-        })
+        output.append(
+            {
+                "id": str(t.id),
+                "signal_id": str(t.signal_id) if t.signal_id else None,
+                "ticker": t.ticker,
+                "side": t.side,
+                "qty": t.qty,
+                "notional": t.notional,
+                "status": t.status,
+                "alpaca_order_id": t.alpaca_order_id,
+                "filled_price": t.filled_price,
+                "filled_at": t.filled_at.isoformat() if t.filled_at else None,
+                "created_at": t.created_at.isoformat(),
+                "updated_at": t.updated_at.isoformat(),
+                "current_price": current_price or None,
+                "stop_loss": sl,
+                "take_profit": tp,
+                "shares": shares,
+                "max_loss": max_loss,
+                "max_gain": max_gain,
+                "risk_pct_of_account": risk_pct,
+                "rr_ratio": rr_ratio,
+            }
+        )
     return output
 
 

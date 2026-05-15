@@ -1,18 +1,16 @@
 WATCHLIST = [
-    {"ticker": "BTC/USD", "description": "Bitcoin / US Dollar",               "type": "crypto"},
-    {"ticker": "SPY",     "description": "S&P 500 broad market",              "type": "etf"},
-    {"ticker": "QQQ",     "description": "Nasdaq / tech heavy",               "type": "etf"},
-    {"ticker": "XLE",     "description": "Energy sector",                     "type": "etf"},
-     {"ticker": "SLV",     "description": "Silver (safe haven)",               "type": "etf"},
-    {"ticker": "USO",     "description": "Crude oil ETF",                     "type": "etf"},
-    {"ticker": "GLD",     "description": "Gold (safe haven)",                 "type": "etf"},
-    {"ticker": "TLT",     "description": "Long-term treasuries",              "type": "etf"},
-    {"ticker": "XLK",     "description": "Technology sector",                 "type": "etf"},
-    {"ticker": "XLF",     "description": "Financial sector",                  "type": "etf"},
-    {"ticker": "XLI",     "description": "Industrials sector",                "type": "etf"},
-    {"ticker": "XLV",     "description": "Healthcare sector",                 "type": "etf"},
-   
-    
+    {"ticker": "BTC/USD", "description": "Bitcoin / US Dollar", "type": "crypto"},
+    {"ticker": "SPY", "description": "S&P 500 broad market", "type": "etf"},
+    {"ticker": "QQQ", "description": "Nasdaq / tech heavy", "type": "etf"},
+    {"ticker": "XLE", "description": "Energy sector", "type": "etf"},
+    {"ticker": "SLV", "description": "Silver (safe haven)", "type": "etf"},
+    {"ticker": "USO", "description": "Crude oil ETF", "type": "etf"},
+    {"ticker": "GLD", "description": "Gold (safe haven)", "type": "etf"},
+    {"ticker": "TLT", "description": "Long-term treasuries", "type": "etf"},
+    {"ticker": "XLK", "description": "Technology sector", "type": "etf"},
+    {"ticker": "XLF", "description": "Financial sector", "type": "etf"},
+    {"ticker": "XLI", "description": "Industrials sector", "type": "etf"},
+    {"ticker": "XLV", "description": "Healthcare sector", "type": "etf"},
 ]
 
 # Flat list of tickers for loops

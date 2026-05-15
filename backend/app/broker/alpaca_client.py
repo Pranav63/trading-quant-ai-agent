@@ -84,7 +84,9 @@ def place_market_order(ticker: str, side: str, notional: float) -> dict:
 
     try:
         order = trading_client.submit_order(order_req)
-        logger.info("alpaca.order.submitted", ticker=ticker, side=side, order_id=str(order.id))
+        logger.info(
+            "alpaca.order.submitted", ticker=ticker, side=side, order_id=str(order.id)
+        )
         return {"order_id": str(order.id), "status": str(order.status)}
     except Exception as e:
         logger.error("alpaca.order.failed", ticker=ticker, error=str(e))
@@ -97,6 +99,7 @@ def cancel_order(order_id: str):
 
 def get_portfolio_history():
     from alpaca.trading.requests import GetPortfolioHistoryRequest
+
     try:
         req = GetPortfolioHistoryRequest(period="1M", timeframe="1D")
         return trading_client.get_portfolio_history(request_params=req)

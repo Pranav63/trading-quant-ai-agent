@@ -46,17 +46,26 @@ async def _fetch_og_image(url: str) -> str | None:
         async with httpx.AsyncClient(timeout=5, follow_redirects=True) as client:
             r = await client.get(url, headers={"User-Agent": "Mozilla/5.0"})
             soup = BeautifulSoup(r.text, "html.parser")
-            tag = (soup.find("meta", property="og:image")
-                   or soup.find("meta", attrs={"name": "twitter:image"}))
+            tag = soup.find("meta", property="og:image") or soup.find(
+                "meta", attrs={"name": "twitter:image"}
+            )
             return tag["content"] if tag and tag.get("content") else None
     except Exception:
         return None
 
 
 async def _queue_article(
-    db: AsyncSession, redis, *, source: str, headline: str, summary: str,
-    url: str, published_at: datetime, tickers: list[str],
-    ticker_hint: str | None = None, sentiment_raw: float | None = None,
+    db: AsyncSession,
+    redis,
+    *,
+    source: str,
+    headline: str,
+    summary: str,
+    url: str,
+    published_at: datetime,
+    tickers: list[str],
+    ticker_hint: str | None = None,
+    sentiment_raw: float | None = None,
 ) -> bool:
     if not headline:
         return False
@@ -66,9 +75,14 @@ async def _queue_article(
     image_url = await _fetch_og_image(url) if url else None
 
     article = NewsArticle(
-        source=source, headline=headline, summary=summary, url=url,
-        tickers=tickers, sentiment_raw=sentiment_raw,
-        published_at=published_at, image_url=image_url,
+        source=source,
+        headline=headline,
+        summary=summary,
+        url=url,
+        tickers=tickers,
+        sentiment_raw=sentiment_raw,
+        published_at=published_at,
+        image_url=image_url,
     )
     article.signal_class = classify_signal(article)
     db.add(article)
@@ -77,17 +91,23 @@ async def _queue_article(
     if url:
         await _mark_seen(redis, url)
 
-    await redis.lpush(CLASSIFY_QUEUE_KEY, json.dumps({
-        "article_id": str(article.id),
-        "headline": headline,
-        "summary": summary,
-        "ticker": ticker_hint or (tickers[0] if tickers else None),
-    }))
+    await redis.lpush(
+        CLASSIFY_QUEUE_KEY,
+        json.dumps(
+            {
+                "article_id": str(article.id),
+                "headline": headline,
+                "summary": summary,
+                "ticker": ticker_hint or (tickers[0] if tickers else None),
+            }
+        ),
+    )
     return True
 
 
 async def _warm_ticker_cache(ticker: str):
     from app.indicators.technical import get_hourly_bars, get_daily_bars
+
     loop = asyncio.get_event_loop()
     try:
         await asyncio.gather(
@@ -100,18 +120,23 @@ async def _warm_ticker_cache(ticker: str):
 
 async def _warm_all_caches():
     from app.indicators.technical import clear_bar_cache
+
     clear_bar_cache()
     logger.info("ingestion.cache.warming", tickers=len(WATCHLIST))
     sem = asyncio.Semaphore(4)
+
     async def _warm_with_sem(ticker):
         async with sem:
             await _warm_ticker_cache(ticker)
+
     await asyncio.gather(*[_warm_with_sem(t) for t in WATCHLIST])
     logger.info("ingestion.cache.warmed")
 
 
 async def run_ingestion_cycle(db: AsyncSession):
-    await push_event("ingestion_start", "fetching news — Finnhub, NewsAPI, RSS, FRED...")
+    await push_event(
+        "ingestion_start", "fetching news — Finnhub, NewsAPI, RSS, FRED..."
+    )
     logger.info("ingestion.cycle.start")
     await _warm_all_caches()
 
@@ -127,14 +152,19 @@ async def run_ingestion_cycle(db: AsyncSession):
             articles = await get_company_news(ticker, yesterday, today)
             for a in articles[:5]:
                 ok = await _queue_article(
-                    db, redis, source="finnhub",
-                    headline=a.get("headline", ""), summary=a.get("summary", ""),
+                    db,
+                    redis,
+                    source="finnhub",
+                    headline=a.get("headline", ""),
+                    summary=a.get("summary", ""),
                     url=a.get("url", ""),
                     published_at=datetime.fromtimestamp(a["datetime"], tz=timezone.utc),
-                    tickers=[ticker], ticker_hint=ticker,
+                    tickers=[ticker],
+                    ticker_hint=ticker,
                     sentiment_raw=a.get("sentiment", {}).get("bullishPercent"),
                 )
-                queued += ok; skipped += not ok
+                queued += ok
+                skipped += not ok
         except Exception as e:
             logger.error("ingestion.finnhub.failed", ticker=ticker, error=str(e))
 
@@ -145,16 +175,23 @@ async def run_ingestion_cycle(db: AsyncSession):
             pub = None
             if h.get("publishedAt"):
                 try:
-                    pub = datetime.fromisoformat(h["publishedAt"].replace("Z", "+00:00"))
+                    pub = datetime.fromisoformat(
+                        h["publishedAt"].replace("Z", "+00:00")
+                    )
                 except Exception:
                     pass
             ok = await _queue_article(
-                db, redis, source="newsapi",
-                headline=h.get("title", ""), summary=h.get("description", ""),
+                db,
+                redis,
+                source="newsapi",
+                headline=h.get("title", ""),
+                summary=h.get("description", ""),
                 url=h.get("url", ""),
-                published_at=pub or datetime.now(timezone.utc), tickers=[],
+                published_at=pub or datetime.now(timezone.utc),
+                tickers=[],
             )
-            queued += ok; skipped += not ok
+            queued += ok
+            skipped += not ok
     except Exception as e:
         logger.error("ingestion.newsapi.failed", error=str(e))
 
@@ -162,11 +199,17 @@ async def run_ingestion_cycle(db: AsyncSession):
     try:
         for a in await get_rss_articles():
             ok = await _queue_article(
-                db, redis, source=a["source"], headline=a["headline"],
-                summary=a["summary"], url=a["url"],
-                published_at=a["published_at"], tickers=[],
+                db,
+                redis,
+                source=a["source"],
+                headline=a["headline"],
+                summary=a["summary"],
+                url=a["url"],
+                published_at=a["published_at"],
+                tickers=[],
             )
-            queued += ok; skipped += not ok
+            queued += ok
+            skipped += not ok
     except Exception as e:
         logger.error("ingestion.rss.failed", error=str(e))
 
@@ -174,13 +217,18 @@ async def run_ingestion_cycle(db: AsyncSession):
     try:
         for a in await get_fred_macro_articles():
             ok = await _queue_article(
-                db, redis, source="fred", headline=a["headline"],
-                summary=a["summary"], url=a["url"],
+                db,
+                redis,
+                source="fred",
+                headline=a["headline"],
+                summary=a["summary"],
+                url=a["url"],
                 published_at=a["published_at"],
                 tickers=[a["ticker_hint"]] if a.get("ticker_hint") else [],
                 ticker_hint=a.get("ticker_hint"),
             )
-            queued += ok; skipped += not ok
+            queued += ok
+            skipped += not ok
     except Exception as e:
         logger.error("ingestion.fred.failed", error=str(e))
 
@@ -190,6 +238,7 @@ async def run_ingestion_cycle(db: AsyncSession):
     try:
         from app.api.routes.brief import generate_brief
         import json as _json
+
         brief_data = await generate_brief(db)
         redis_client = await get_redis()
         await redis_client.set("market:brief", _json.dumps(brief_data), ex=3600)
@@ -201,4 +250,6 @@ async def run_ingestion_cycle(db: AsyncSession):
         f"ingestion done — {queued} new articles queued, {skipped} duplicates skipped",
         {"queued": queued, "skipped": skipped, "queue_total": queue_len},
     )
-    logger.info("ingestion.cycle.done", queued=queued, skipped=skipped, queue_total=queue_len)
+    logger.info(
+        "ingestion.cycle.done", queued=queued, skipped=skipped, queue_total=queue_len
+    )

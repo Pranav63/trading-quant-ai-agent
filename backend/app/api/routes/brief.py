@@ -2,6 +2,7 @@
 AI Market Brief — runs after ingestion, summarizes top signals into
 a 3-sentence market brief. Stored in Redis, served via GET.
 """
+
 import json
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Depends
@@ -45,12 +46,21 @@ async def _generate_with_gemini(prompt: str) -> dict:
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
             "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
-            headers={"X-goog-api-key": settings.gemini_api_key, "Content-Type": "application/json"},
+            headers={
+                "X-goog-api-key": settings.gemini_api_key,
+                "Content-Type": "application/json",
+            },
             json={"contents": [{"parts": [{"text": prompt}]}]},
         )
         resp.raise_for_status()
         raw = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
-        raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+        raw = (
+            raw.strip()
+            .removeprefix("```json")
+            .removeprefix("```")
+            .removesuffix("```")
+            .strip()
+        )
         return json.loads(raw)
 
 
@@ -76,10 +86,9 @@ async def generate_brief(db: AsyncSession) -> dict:
             "article_count": 0,
         }
 
-    headlines = "\n".join([
-        f"[{a.signal_class}] {a.headline} (source: {a.source})"
-        for a in articles
-    ])
+    headlines = "\n".join(
+        [f"[{a.signal_class}] {a.headline} (source: {a.source})" for a in articles]
+    )
     prompt = BRIEF_PROMPT.format(headlines=headlines)
 
     result_data = None

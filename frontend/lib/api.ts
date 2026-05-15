@@ -1,30 +1,57 @@
-import axios from "axios"
-import { Account, NewsArticle, PortfolioHistory, Position, Signal, Trade } from "@/types"
+import axios from "axios";
+import {
+  Account,
+  NewsArticle,
+  PortfolioHistory,
+  Position,
+  Signal,
+  Trade,
+} from "@/types";
 
 const api = axios.create({
   baseURL: process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000",
   timeout: 10000,
-})
+});
 
 export const getAccount = (): Promise<Account> =>
-  api.get("/api/v1/portfolio/account").then(r => r.data)
+  api.get("/api/v1/portfolio/account").then((r) => r.data);
 
 export const getPositions = (): Promise<Position[]> =>
-  api.get("/api/v1/portfolio/positions").then(r => r.data)
+  api.get("/api/v1/portfolio/positions").then((r) => r.data);
 
 export const getPortfolioHistory = (): Promise<PortfolioHistory> =>
-  api.get("/api/v1/portfolio/history").then(r => r.data)
+  api.get("/api/v1/portfolio/history").then((r) => r.data);
 
 export const getQuotes = (): Promise<Record<string, number>> =>
-  api.get("/api/v1/portfolio/quotes").then(r => r.data)
+  api.get("/api/v1/portfolio/quotes").then((r) => r.data);
 
 // Grouped format with pagination
-export const getNews = (before?: string): Promise<{ groups: NewsGroup[]; next_cursor: string | null; has_more: boolean }> =>
-  api.get("/api/v1/news/recent", { params: { limit: 30, ...(before && { before }) } }).then(r => r.data)
+export const getNews = (
+  before?: string,
+): Promise<{
+  groups: NewsGroup[];
+  next_cursor: string | null;
+  has_more: boolean;
+}> =>
+  api
+    .get("/api/v1/news/recent", {
+      params: { limit: 30, ...(before && { before }) },
+    })
+    .then((r) => r.data);
 
 // Flat format with pagination — response is now { articles: [], next_cursor, has_more }
-export const getNewsFlat = (before?: string): Promise<{ articles: NewsArticle[]; next_cursor: string | null; has_more: boolean }> =>
-  api.get("/api/v1/news/recent/flat", { params: { limit: 60, ...(before && { before }) } }).then(r => r.data)
+export const getNewsFlat = (
+  before?: string,
+): Promise<{
+  articles: NewsArticle[];
+  next_cursor: string | null;
+  has_more: boolean;
+}> =>
+  api
+    .get("/api/v1/news/recent/flat", {
+      params: { limit: 60, ...(before && { before }) },
+    })
+    .then((r) => r.data);
 
 /**
  * Creates an SSE connection to the news stream.
@@ -42,125 +69,137 @@ export const createNewsStream = (
   onArticles: (articles: NewsArticle[]) => void,
   onError?: (e: Event) => void,
 ): EventSource => {
-  const baseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"
-  const es = new EventSource(`${baseUrl}/api/v1/news/stream`)
+  const baseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+  const es = new EventSource(`${baseUrl}/api/v1/news/stream`);
 
   es.addEventListener("init", (e: MessageEvent) => {
-    onInit(JSON.parse(e.data))
-  })
+    onInit(JSON.parse(e.data));
+  });
 
   es.addEventListener("articles", (e: MessageEvent) => {
-    onArticles(JSON.parse(e.data))
-  })
+    onArticles(JSON.parse(e.data));
+  });
 
   es.addEventListener("heartbeat", () => {
     // connection alive — no action needed
-  })
+  });
 
   if (onError) {
-    es.onerror = onError
+    es.onerror = onError;
   }
 
-  return es
-}
+  return es;
+};
 
 export const getSignals = (): Promise<Signal[]> =>
-  api.get("/api/v1/signals/recent", { params: { limit: 30 } }).then(r => r.data)
+  api
+    .get("/api/v1/signals/recent", { params: { limit: 30 } })
+    .then((r) => r.data);
 
-export const getSignalConflicts = (): Promise<{ conflicts: { ticker: string, sides: string[] }[], count: number }> =>
-  api.get("/api/v1/signals/conflicts").then(r => r.data)
+export const getSignalConflicts = (): Promise<{
+  conflicts: { ticker: string; sides: string[] }[];
+  count: number;
+}> => api.get("/api/v1/signals/conflicts").then((r) => r.data);
 
 export const getPendingTrades = (): Promise<Trade[]> =>
-  api.get("/api/v1/trades/pending").then(r => r.data)
+  api.get("/api/v1/trades/pending").then((r) => r.data);
 
 export const getTradeHistory = (): Promise<Trade[]> =>
-  api.get("/api/v1/trades/history", { params: { limit: 50 } }).then(r => r.data)
+  api
+    .get("/api/v1/trades/history", { params: { limit: 50 } })
+    .then((r) => r.data);
 
-export const approveTrade = (id: string): Promise<{ status: string; order_id: string }> =>
-  api.post(`/api/v1/trades/${id}/approve`).then(r => r.data)
+export const approveTrade = (
+  id: string,
+): Promise<{ status: string; order_id: string }> =>
+  api.post(`/api/v1/trades/${id}/approve`).then((r) => r.data);
 
 export const rejectTrade = (id: string): Promise<{ status: string }> =>
-  api.post(`/api/v1/trades/${id}/reject`).then(r => r.data)
+  api.post(`/api/v1/trades/${id}/reject`).then((r) => r.data);
 
 export const liquidateTrade = (id: string): Promise<{ status: string }> =>
-  api.post(`/api/v1/trades/${id}/liquidate`).then(r => r.data)
+  api.post(`/api/v1/trades/${id}/liquidate`).then((r) => r.data);
 
 export const liquidateAll = (): Promise<{ status: string; closed: any[] }> =>
-  api.post("/api/v1/trades/liquidate-all").then(r => r.data)
+  api.post("/api/v1/trades/liquidate-all").then((r) => r.data);
 
 export const triggerIngestion = (): Promise<{ status: string }> =>
-  api.post("/api/v1/debug/trigger-ingestion").then(r => r.data)
+  api.post("/api/v1/debug/trigger-ingestion").then((r) => r.data);
 
 export const getRecentlyFailed = (): Promise<Trade[]> =>
-  api.get("/api/v1/trades/recently-failed").then(r => r.data)
+  api.get("/api/v1/trades/recently-failed").then((r) => r.data);
 
 export const getActivityFeed = (): Promise<ActivityEvent[]> =>
-  api.get("/api/v1/activity/feed").then(r => r.data)
+  api.get("/api/v1/activity/feed").then((r) => r.data);
 
 export interface ActivityEvent {
-  id: string
-  type: string
-  message: string
-  icon: string
-  color: string
-  label: string
-  ts: string
-  meta: Record<string, any>
+  id: string;
+  type: string;
+  message: string;
+  icon: string;
+  color: string;
+  label: string;
+  ts: string;
+  meta: Record<string, any>;
 }
 
 export interface NewsGroup {
-  ticker: string
-  article_count: number
-  latest_at: string
-  articles: NewsArticle[]
+  ticker: string;
+  article_count: number;
+  latest_at: string;
+  articles: NewsArticle[];
 }
 
 export interface NewsCluster {
-  ticker: string
-  signal_class: string
-  source_count: number
-  sources: string[]
-  article_count: number
-  latest_at: string
-  articles: NewsArticle[]
+  ticker: string;
+  signal_class: string;
+  source_count: number;
+  sources: string[];
+  article_count: number;
+  latest_at: string;
+  articles: NewsArticle[];
 }
 
-export const getNewsClusters = (hours = 6): Promise<{ clusters: NewsCluster[]; total: number }> =>
-  api.get("/api/v1/news/clusters", { params: { hours, min_sources: 2 } }).then(r => r.data)
+export const getNewsClusters = (
+  hours = 6,
+): Promise<{ clusters: NewsCluster[]; total: number }> =>
+  api
+    .get("/api/v1/news/clusters", { params: { hours, min_sources: 2 } })
+    .then((r) => r.data);
 
 export interface MacroIndicator {
-  id: string
-  label: string
-  unit: string
-  value: number | null
-  prev: number | null
-  change: number | null
-  date: string | null
+  id: string;
+  label: string;
+  unit: string;
+  value: number | null;
+  prev: number | null;
+  change: number | null;
+  date: string | null;
 }
 
 export const getMacroStrip = (): Promise<{ indicators: MacroIndicator[] }> =>
-  api.get("/api/v1/macro/strip").then(r => r.data)
+  api.get("/api/v1/macro/strip").then((r) => r.data);
 
 export interface MarketBrief {
-  brief: string
-  dominant_theme: string
-  affected_etfs: string[]
-  generated_at: string | null
-  article_count: number
-  provider?: string
+  brief: string;
+  dominant_theme: string;
+  affected_etfs: string[];
+  generated_at: string | null;
+  article_count: number;
+  provider?: string;
 }
 
 export const getMarketBrief = (): Promise<MarketBrief> =>
-  api.get("/api/v1/brief").then(r => r.data)
+  api.get("/api/v1/brief").then((r) => r.data);
 
 export const triggerBrief = (): Promise<MarketBrief> =>
-  api.post("/api/v1/brief/generate").then(r => r.data)
+  api.post("/api/v1/brief/generate").then((r) => r.data);
 
 export interface WatchlistItem {
-  ticker: string
-  description: string
-  type: "etf" | "crypto"
+  ticker: string;
+  description: string;
+  type: "etf" | "crypto";
 }
 
 export const getWatchlist = (): Promise<WatchlistItem[]> =>
-  api.get("/api/v1/watchlist").then(r => r.data)
+  api.get("/api/v1/watchlist").then((r) => r.data);

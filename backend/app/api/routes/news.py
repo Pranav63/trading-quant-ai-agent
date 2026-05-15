@@ -107,7 +107,9 @@ async def stream_news(db: AsyncSession = Depends(get_db)):
             await asyncio.sleep(30)
             try:
                 result = await db.execute(
-                    select(NewsArticle).order_by(NewsArticle.ingested_at.desc()).limit(20)
+                    select(NewsArticle)
+                    .order_by(NewsArticle.ingested_at.desc())
+                    .limit(20)
                 )
                 recent = result.scalars().all()
 
@@ -140,6 +142,7 @@ async def stream_news(db: AsyncSession = Depends(get_db)):
         },
     )
 
+
 @router.get("/clusters")
 async def get_news_clusters(
     hours: int = Query(6, le=24),
@@ -152,6 +155,7 @@ async def get_news_clusters(
     Returns only clusters with 2+ sources (real signal).
     """
     from datetime import timedelta
+
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
 
     result = await db.execute(
@@ -190,21 +194,27 @@ async def get_news_clusters(
         priority = {"CRITICAL": 0, "ELEVATED": 1, "MONITORING": 2, "NOISE": 3}
         top_class = min(
             (a.get("signal_class", "MONITORING") for a in items),
-            key=lambda x: priority.get(x, 2)
+            key=lambda x: priority.get(x, 2),
         )
-        output.append({
-            "ticker": ticker,
-            "signal_class": top_class,
-            "source_count": len(unique_sources),
-            "sources": unique_sources,
-            "article_count": len(items),
-            "latest_at": items[0]["published_at"],
-            "articles": items[:5],  # cap at 5 per cluster
-        })
+        output.append(
+            {
+                "ticker": ticker,
+                "signal_class": top_class,
+                "source_count": len(unique_sources),
+                "sources": unique_sources,
+                "article_count": len(items),
+                "latest_at": items[0]["published_at"],
+                "articles": items[:5],  # cap at 5 per cluster
+            }
+        )
 
-    output.sort(key=lambda x: (
-        {"CRITICAL": 0, "ELEVATED": 1, "MONITORING": 2, "NOISE": 3}.get(x["signal_class"], 2),
-        x["latest_at"] or ""
-    ))
+    output.sort(
+        key=lambda x: (
+            {"CRITICAL": 0, "ELEVATED": 1, "MONITORING": 2, "NOISE": 3}.get(
+                x["signal_class"], 2
+            ),
+            x["latest_at"] or "",
+        )
+    )
 
     return {"clusters": output, "total": len(output)}

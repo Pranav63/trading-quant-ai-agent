@@ -20,7 +20,6 @@ from app.broker.risk_guard import compute_notional
 from app.indicators.technical import confirm_signal
 from app.core.watchlist import WATCHLIST_CONTEXT
 
-
 settings = get_settings()
 groq_client = AsyncGroq(api_key=settings.groq_api_key)
 
@@ -84,7 +83,13 @@ async def _classify_with_gemini(user_content: str) -> dict:
         )
         resp.raise_for_status()
         raw = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
-        raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+        raw = (
+            raw.strip()
+            .removeprefix("```json")
+            .removeprefix("```")
+            .removesuffix("```")
+            .strip()
+        )
         return json.loads(raw)
 
 

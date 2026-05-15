@@ -35,8 +35,8 @@ export default function RootLayout({
             }}
           >
             <div style={{ marginLeft: 220 }}>
-  <MacroStrip />
-</div>
+              <MacroStrip />
+            </div>
             <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
               <Sidebar />
               <main

@@ -1,15 +1,20 @@
 from app.core.watchlist import ETF_TICKERS, CRYPTO_TICKERS
 
-TIER_1_SOURCES = {"rss_reuters_business", "rss_reuters_markets", "rss_wsj_markets", "rss_ft_markets"}
+TIER_1_SOURCES = {
+    "rss_reuters_business",
+    "rss_reuters_markets",
+    "rss_wsj_markets",
+    "rss_ft_markets",
+}
 TIER_2_SOURCES = {"finnhub", "newsapi", "rss_investing.com_economy"}
-NOISE_SOURCES  = {"reddit"}
-WATCHLIST_SET  = set(ETF_TICKERS + CRYPTO_TICKERS)
+NOISE_SOURCES = {"reddit"}
+WATCHLIST_SET = set(ETF_TICKERS + CRYPTO_TICKERS)
 
 
 def classify_signal(article) -> str:
-    source     = article.source or ""
-    tickers    = set(article.tickers or [])
-    s          = article.sentiment_raw
+    source = article.source or ""
+    tickers = set(article.tickers or [])
+    s = article.sentiment_raw
     has_ticker = bool(tickers & WATCHLIST_SET)
 
     if source == "fred":

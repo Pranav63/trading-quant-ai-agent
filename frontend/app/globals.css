@@ -140,10 +140,12 @@
   --dash-green: #22c55e;
   --dash-red: #ef4444;
   --dash-amber: #f59e0b;
-  --dash-mono: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  --dash-mono: "SF Mono", "Fira Code", "Cascadia Code", monospace;
 }
 
-* { box-sizing: border-box; }
+* {
+  box-sizing: border-box;
+}
 
 body {
   background: var(--dash-bg) !important;
@@ -151,34 +153,72 @@ body {
 }
 
 @keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.25; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
 }
 
 @keyframes slideIn {
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
-.dash-row:hover { background: #111118 !important; }
+.dash-row:hover {
+  background: #111118 !important;
+}
 .dash-btn-approve {
-  background: #0d2e1a; color: #22c55e; border: 1px solid #1a4a2a;
-  padding: 4px 10px; border-radius: 4px; font-size: 11px; cursor: pointer;
-  font-family: var(--dash-mono); letter-spacing: 0.04em; transition: background 0.15s;
+  background: #0d2e1a;
+  color: #22c55e;
+  border: 1px solid #1a4a2a;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+  font-family: var(--dash-mono);
+  letter-spacing: 0.04em;
+  transition: background 0.15s;
 }
-.dash-btn-approve:hover { background: #1a4a2a; }
+.dash-btn-approve:hover {
+  background: #1a4a2a;
+}
 .dash-btn-reject {
-  background: #2e0d0d; color: #ef4444; border: 1px solid #4a1a1a;
-  padding: 4px 10px; border-radius: 4px; font-size: 11px; cursor: pointer;
-  font-family: var(--dash-mono); letter-spacing: 0.04em; margin-left: 4px; transition: background 0.15s;
+  background: #2e0d0d;
+  color: #ef4444;
+  border: 1px solid #4a1a1a;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+  font-family: var(--dash-mono);
+  letter-spacing: 0.04em;
+  margin-left: 4px;
+  transition: background 0.15s;
 }
-.dash-btn-reject:hover { background: #4a1a1a; }
+.dash-btn-reject:hover {
+  background: #4a1a1a;
+}
 .dash-nav-link {
-  display: flex; align-items: center; gap: 10px;
-  padding: 8px 12px; border-radius: 6px;
-  font-size: 12px; letter-spacing: 0.04em;
-  color: var(--dash-muted); text-decoration: none;
-  transition: all 0.15s; font-family: var(--dash-mono);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--dash-muted);
+  text-decoration: none;
+  transition: all 0.15s;
+  font-family: var(--dash-mono);
   border: 1px solid transparent;
 }
 .dash-nav-link:hover {
@@ -198,4 +238,6 @@ body {
   padding: 16px;
   animation: slideIn 0.2s ease;
 }
-.dash-table-row:hover { background: #111118; }
+.dash-table-row:hover {
+  background: #111118;
+}

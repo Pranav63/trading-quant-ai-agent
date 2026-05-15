@@ -1,13 +1,15 @@
 """
 Reads from Redis queue:classify, calls Groq LLM to classify each
 news article into a trading signal, writes Signal + Trade rows to DB.
+Falls back to Gemini if Groq is rate limited.
 """
 
 import json
 import asyncio
+import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from groq import AsyncGroq
+from groq import AsyncGroq, RateLimitError
 from app.core.config import get_settings
 from app.core.logging import logger
 from app.core.activity import push_event
@@ -19,6 +21,8 @@ from app.indicators.technical import confirm_signal
 
 settings = get_settings()
 groq_client = AsyncGroq(api_key=settings.groq_api_key)
+
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
 
 CLASSIFY_QUEUE_KEY = "queue:classify"
 PROCESSED_SET_KEY = "processed:articles"
@@ -85,12 +89,31 @@ Rules:
 """
 
 
+async def _classify_with_gemini(user_content: str) -> dict:
+    prompt = f"{SYSTEM_PROMPT}\n\nUser: {user_content}\n\nRespond only with valid JSON."
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            GEMINI_URL,
+            headers={
+                "X-goog-api-key": settings.gemini_api_key,
+                "Content-Type": "application/json",
+            },
+            json={"contents": [{"parts": [{"text": prompt}]}]},
+        )
+        resp.raise_for_status()
+        raw = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+        raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+        return json.loads(raw)
+
+
 async def classify_article(
     headline: str, summary: str, ticker_hint: str = None
 ) -> dict:
     user_content = f"Headline: {headline}\nSummary: {summary or 'N/A'}"
     if ticker_hint:
         user_content += f"\nDirect ticker context: {ticker_hint}"
+
+    # Try Groq first
     try:
         response = await groq_client.chat.completions.create(
             model="llama-3.3-70b-versatile",
@@ -106,22 +129,40 @@ async def classify_article(
         result = json.loads(raw)
         logger.info(
             "llm.classified",
+            provider="groq",
             actionable=result.get("actionable"),
             headline=headline[:60],
         )
         return result
+
+    except RateLimitError:
+        logger.warning(
+            "llm.groq.rate_limited — falling back to gemini",
+            headline=headline[:60],
+        )
+
     except Exception as e:
-        logger.error("llm.classify.error", error=str(e), headline=headline[:60])
+        logger.error("llm.groq.error", error=str(e), headline=headline[:60])
+
+    # Fallback to Gemini
+    try:
+        result = await _classify_with_gemini(user_content)
+        logger.info(
+            "llm.classified",
+            provider="gemini",
+            actionable=result.get("actionable"),
+            headline=headline[:60],
+        )
+        return result
+
+    except Exception as e:
+        logger.error("llm.gemini.error", error=str(e), headline=headline[:60])
         return {"actionable": False, "signals": []}
 
 
 async def _get_pending_signal_directions(
     db: AsyncSession, tickers: list[str]
 ) -> dict[str, str]:
-    """
-    Returns {ticker: signal_type} for any PENDING trades on these tickers.
-    Used to block conflicting signals.
-    """
     if not tickers:
         return {}
     result = await db.execute(
@@ -152,7 +193,6 @@ async def process_queue_item(item: dict, db: AsyncSession):
 
     signals = result.get("signals", [])
 
-    # Deduplicate within this article — no BUY+SELL for same ticker
     seen_in_article: dict[str, str] = {}
     deduped_signals = []
     for sig in signals:
@@ -167,7 +207,7 @@ async def process_queue_item(item: dict, db: AsyncSession):
                 first=seen_in_article[t],
                 second=s,
             )
-            continue  # drop the second signal for this ticker
+            continue
         seen_in_article[t] = s
         deduped_signals.append(sig)
 
@@ -175,7 +215,6 @@ async def process_queue_item(item: dict, db: AsyncSession):
         await redis.sadd(PROCESSED_SET_KEY, article_id)
         return
 
-    # Check existing PENDING trades to block opposing signals
     pending_directions = await _get_pending_signal_directions(
         db, [s["ticker"] for s in deduped_signals]
     )
@@ -189,7 +228,6 @@ async def process_queue_item(item: dict, db: AsyncSession):
         if confidence < 0.5:
             continue
 
-        # Block if a PENDING trade already exists in the opposite direction
         existing_side = pending_directions.get(ticker)
         if existing_side:
             existing_signal = "BUY" if existing_side == "buy" else "SELL"
@@ -211,7 +249,6 @@ async def process_queue_item(item: dict, db: AsyncSession):
                 )
                 continue
 
-        # Indicator confirmation — failure now hard-blocks (confirmed=False)
         try:
             loop = asyncio.get_event_loop()
             tech = await loop.run_in_executor(None, confirm_signal, ticker, signal_type)
@@ -222,7 +259,7 @@ async def process_queue_item(item: dict, db: AsyncSession):
                 f"{signal_type} {ticker} rejected — indicator executor crashed: {str(e)[:60]}",
                 {"ticker": ticker},
             )
-            continue  # ← hard block, was: confirmed=True ghost pass
+            continue
 
         if not tech["confirmed"]:
             veto_reason = tech["details"].get("atr_veto_reason")

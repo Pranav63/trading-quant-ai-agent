@@ -7,9 +7,10 @@ Deduplicates by URL before inserting to avoid re-queueing same articles.
 import json
 import asyncio
 import hashlib
+import httpx
 from datetime import datetime, timezone, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from bs4 import BeautifulSoup
 from app.db.redis_client import get_redis
 from app.models.market import NewsArticle
 from app.core.activity import push_event
@@ -17,6 +18,7 @@ from app.ingestion.finnhub_client import get_company_news
 from app.ingestion.newsapi_client import get_top_business_headlines
 from app.ingestion.rss_client import get_rss_articles
 from app.ingestion.fred_client import get_fred_macro_articles
+from app.ingestion.signal_classifier import classify_signal
 from app.core.config import get_settings
 from app.core.logging import logger
 
@@ -24,12 +26,11 @@ settings = get_settings()
 
 WATCHLIST = ["SPY", "QQQ", "XLK", "XLF", "XLE", "XLV", "XLI", "GLD", "TLT"]
 CLASSIFY_QUEUE_KEY = "queue:classify"
-SEEN_URLS_KEY = "ingestion:seen_urls"  # Redis set — persists across cycles
-SEEN_URLS_TTL = 60 * 60 * 24  # 24h — auto-expire old URLs
+SEEN_URLS_KEY = "ingestion:seen_urls"
+SEEN_URLS_TTL = 60 * 60 * 24
 
 
 def _url_hash(url: str) -> str:
-    """Short hash for URL dedup — avoids storing full URLs in Redis."""
     return hashlib.md5(url.encode()).hexdigest()
 
 
@@ -41,6 +42,24 @@ async def _mark_seen(redis, url: str):
     h = _url_hash(url)
     await redis.sadd(SEEN_URLS_KEY, h)
     await redis.expire(SEEN_URLS_KEY, SEEN_URLS_TTL)
+
+
+async def _fetch_og_image(url: str) -> str | None:
+    if not url:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=5, follow_redirects=True) as client:
+            r = await client.get(url, headers={"User-Agent": "Mozilla/5.0"})
+            soup = BeautifulSoup(r.text, "html.parser")
+            tag = (
+                soup.find("meta", property="og:image")
+                or soup.find("meta", attrs={"name": "twitter:image"})
+            )
+            if tag and tag.get("content"):
+                return tag["content"]
+            return None
+    except Exception:
+        return None
 
 
 async def _queue_article(
@@ -56,15 +75,14 @@ async def _queue_article(
     ticker_hint: str | None = None,
     sentiment_raw: float | None = None,
 ) -> bool:
-    """
-    Insert article to DB + queue for classification.
-    Returns False if duplicate (skipped), True if queued.
-    """
     if not headline:
         return False
 
     if url and await _is_seen(redis, url):
         return False
+
+    # Fetch OG image (non-blocking, best-effort)
+    image_url = await _fetch_og_image(url) if url else None
 
     article = NewsArticle(
         source=source,
@@ -74,7 +92,12 @@ async def _queue_article(
         tickers=tickers,
         sentiment_raw=sentiment_raw,
         published_at=published_at,
+        image_url=image_url,
     )
+
+    # Classify signal severity at ingestion time
+    article.signal_class = classify_signal(article)
+
     db.add(article)
     await db.flush()
 
@@ -93,9 +116,6 @@ async def _queue_article(
         ),
     )
     return True
-
-
-# ── Cache warm ────────────────────────────────────────────────────────────────
 
 
 async def _warm_ticker_cache(ticker: str):
@@ -117,7 +137,6 @@ async def _warm_all_caches():
     clear_bar_cache()
     logger.info("ingestion.cache.warming", tickers=len(WATCHLIST))
 
-    # Throttle to 4 concurrent — prevents connection pool exhaustion
     sem = asyncio.Semaphore(4)
 
     async def _warm_with_sem(ticker):
@@ -126,9 +145,6 @@ async def _warm_all_caches():
 
     await asyncio.gather(*[_warm_with_sem(t) for t in WATCHLIST])
     logger.info("ingestion.cache.warmed")
-
-
-# ── Main cycle ────────────────────────────────────────────────────────────────
 
 
 async def run_ingestion_cycle(db: AsyncSession):
@@ -146,7 +162,7 @@ async def run_ingestion_cycle(db: AsyncSession):
     queued = 0
     skipped = 0
 
-    # ── 1. Finnhub per-ticker ─────────────────────────────────────────────────
+    # 1. Finnhub per-ticker
     for ticker in WATCHLIST:
         try:
             articles = await get_company_news(ticker, yesterday, today)
@@ -168,16 +184,14 @@ async def run_ingestion_cycle(db: AsyncSession):
         except Exception as e:
             logger.error("ingestion.finnhub.failed", ticker=ticker, error=str(e))
 
-    # ── 2. NewsAPI general headlines ──────────────────────────────────────────
+    # 2. NewsAPI
     try:
         headlines = await get_top_business_headlines(page_size=10)
         for h in headlines:
             pub = None
             if h.get("publishedAt"):
                 try:
-                    pub = datetime.fromisoformat(
-                        h["publishedAt"].replace("Z", "+00:00")
-                    )
+                    pub = datetime.fromisoformat(h["publishedAt"].replace("Z", "+00:00"))
                 except Exception:
                     pass
             ok = await _queue_article(
@@ -195,7 +209,7 @@ async def run_ingestion_cycle(db: AsyncSession):
     except Exception as e:
         logger.error("ingestion.newsapi.failed", error=str(e))
 
-    # ── 3. RSS feeds ──────────────────────────────────────────────────────────
+    # 3. RSS feeds
     try:
         rss_articles = await get_rss_articles()
         for a in rss_articles:
@@ -214,7 +228,7 @@ async def run_ingestion_cycle(db: AsyncSession):
     except Exception as e:
         logger.error("ingestion.rss.failed", error=str(e))
 
-    # ── 4. FRED macro data ────────────────────────────────────────────────────
+    # 4. FRED macro
     try:
         fred_articles = await get_fred_macro_articles()
         for a in fred_articles:

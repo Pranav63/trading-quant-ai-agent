@@ -8,6 +8,9 @@ export interface NewsArticle {
   sentiment_raw: number | null
   published_at: string
   ingested_at: string
+  signal_class?: string
+  image_url?: string
+
 }
 
 export interface Signal {

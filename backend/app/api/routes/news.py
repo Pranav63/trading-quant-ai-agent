@@ -24,6 +24,8 @@ def _serialize_article(a: NewsArticle) -> dict:
         "url": a.url,
         "sentiment_raw": a.sentiment_raw,
         "tickers": a.tickers or [],
+        "signal_class": a.signal_class or "MONITORING",
+        "image_url": a.image_url or None,
         "published_at": a.published_at.isoformat() if a.published_at else None,
         "ingested_at": a.ingested_at.isoformat() if a.ingested_at else None,
     }
@@ -89,19 +91,11 @@ async def get_recent_news_flat(
 
 @router.get("/stream")
 async def stream_news(db: AsyncSession = Depends(get_db)):
-    """
-    SSE endpoint. On connect: sends last 30 articles as 'init' event.
-    Then polls every 30s and pushes new articles as 'articles' event.
-    Sends 'heartbeat' every 30s to keep connection alive.
-    """
     async def event_generator():
         last_seen_id: Optional[str] = None
 
-        # Initial payload
         result = await db.execute(
-            select(NewsArticle)
-            .order_by(NewsArticle.published_at.desc())
-            .limit(30)
+            select(NewsArticle).order_by(NewsArticle.published_at.desc()).limit(30)
         )
         initial = result.scalars().all()
         if initial:
@@ -113,9 +107,7 @@ async def stream_news(db: AsyncSession = Depends(get_db)):
             await asyncio.sleep(30)
             try:
                 result = await db.execute(
-                    select(NewsArticle)
-                    .order_by(NewsArticle.ingested_at.desc())
-                    .limit(20)
+                    select(NewsArticle).order_by(NewsArticle.ingested_at.desc()).limit(20)
                 )
                 recent = result.scalars().all()
 

@@ -46,6 +46,8 @@ class NewsArticle(Base):
     sentiment_raw = Column(Float)  # finnhub sentiment score if available
     published_at = Column(DateTime(timezone=True), nullable=False)
     ingested_at = Column(DateTime(timezone=True), default=utcnow)
+    signal_class = Column(String, nullable=True, default="MONITORING")
+    image_url = Column(String, nullable=True)
 
 
 class Signal(Base):

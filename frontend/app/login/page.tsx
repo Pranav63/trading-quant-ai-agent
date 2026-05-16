@@ -8,18 +8,22 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const router = useRouter();
 
-  const handleSubmit = async (e: React.FormEvent) => {
+    const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError("");
     const res = await fetch("/api/auth", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "login", password }),
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "login", password }),
     });
-    if (res.ok) router.push("/dashboard");
-    else { setError("incorrect password"); setLoading(false); }
-  };
+    if (res.ok) {
+        window.location.href = "/dashboard"; 
+    } else {
+        setError("incorrect password");
+        setLoading(false);
+    }
+    };
 
   return (
     <div style={{ height: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#080810", fontFamily: "var(--dash-mono)" }}>

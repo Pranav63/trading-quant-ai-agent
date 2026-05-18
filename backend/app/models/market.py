@@ -3,10 +3,8 @@ from sqlalchemy import (
     String,
     Float,
     DateTime,
-    Integer,
     Text,
     Enum,
-    Boolean,
     JSON,
 )
 from sqlalchemy.dialects.postgresql import UUID
@@ -27,23 +25,25 @@ class SignalType(str, enum.Enum):
 
 
 class TradeStatus(str, enum.Enum):
-    PENDING = "PENDING"  # awaiting your approval
-    APPROVED = "APPROVED"  # you approved, pending execution
-    REJECTED = "REJECTED"  # you rejected
-    EXECUTED = "EXECUTED"  # filled on Alpaca
-    CANCELLED = "CANCELLED"  # cancelled after approval
-    FAILED = "FAILED"  # execution error
+    PENDING = "PENDING"       # awaiting your approval
+    APPROVED = "APPROVED"     # you approved, pending execution
+    REJECTED = "REJECTED"     # you rejected manually
+    EXECUTED = "EXECUTED"     # order submitted to Alpaca
+    FILLED = "FILLED"         # confirmed filled by Alpaca
+    CANCELLED = "CANCELLED"   # cancelled after approval
+    FAILED = "FAILED"         # execution error
+    LIQUIDATED = "LIQUIDATED" # position closed via liquidate button
 
 
 class NewsArticle(Base):
     __tablename__ = "news_articles"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    source = Column(String(50), nullable=False)  # finnhub / newsapi / reddit
+    source = Column(String(50), nullable=False)
     headline = Column(Text, nullable=False)
     summary = Column(Text)
     url = Column(Text)
-    tickers = Column(JSON, default=list)  # ["SPY", "QQQ"]
-    sentiment_raw = Column(Float)  # finnhub sentiment score if available
+    tickers = Column(JSON, default=list)
+    sentiment_raw = Column(Float)
     published_at = Column(DateTime(timezone=True), nullable=False)
     ingested_at = Column(DateTime(timezone=True), default=utcnow)
     signal_class = Column(String, nullable=True, default="MONITORING")
@@ -56,8 +56,8 @@ class Signal(Base):
     news_article_id = Column(UUID(as_uuid=True), nullable=True)
     signal_type = Column(Enum(SignalType), nullable=False)
     ticker = Column(String(20), nullable=False)
-    confidence = Column(Float, nullable=False)  # 0.0 - 1.0
-    reasoning = Column(Text, nullable=False)  # LLM explanation
+    confidence = Column(Float, nullable=False)
+    reasoning = Column(Text, nullable=False)
     llm_model = Column(String(50), nullable=False)
     raw_llm_response = Column(JSON)
     created_at = Column(DateTime(timezone=True), default=utcnow)
@@ -68,13 +68,19 @@ class Trade(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     signal_id = Column(UUID(as_uuid=True), nullable=True)
     ticker = Column(String(20), nullable=False)
-    side = Column(String(4), nullable=False)  # buy / sell
+    side = Column(String(4), nullable=False)        # buy / sell
     qty = Column(Float, nullable=False)
-    notional = Column(Float, nullable=True)  # dollar amount
+    notional = Column(Float, nullable=True)          # dollar amount submitted
     status = Column(Enum(TradeStatus), default=TradeStatus.PENDING)
     alpaca_order_id = Column(String(100), nullable=True)
-    filled_price = Column(Float, nullable=True)
+    filled_price = Column(Float, nullable=True)      # avg fill price from Alpaca
+    filled_qty = Column(Float, nullable=True)        # actual filled quantity
     filled_at = Column(DateTime(timezone=True), nullable=True)
+    stop_loss = Column(Float, nullable=True)         # computed at approval time
+    take_profit = Column(Float, nullable=True)       # computed at approval time
+    close_reason = Column(String(50), nullable=True) # "liquidated" / "stop_loss" / "take_profit" / "manual"
+    closed_price = Column(Float, nullable=True)      # price at close
+    closed_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=utcnow)
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
